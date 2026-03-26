@@ -154,27 +154,80 @@ fn map_io_error(e: std::io::Error, bytes_written: u64) -> TransferError {
             retry_delay: Default::default(),
             reason: e.to_string(),
         },
-        // Permanent failures
-        ErrorKind::NotFound
-        | ErrorKind::PermissionDenied
-        | ErrorKind::ConnectionRefused
-        | ErrorKind::ReadOnlyFilesystem
-        | ErrorKind::AlreadyExists
+        // Permanent failures with human-friendly messages
+        ErrorKind::AlreadyExists => {
+            tracing::debug!("IO error detail: {e}");
+            TransferError::Permanent {
+                reason: "The destination file already exists. Use --overwrite if you want to write over it."
+                    .to_string(),
+            }
+        }
+        ErrorKind::NotFound => {
+            tracing::debug!("IO error detail: {e}");
+            TransferError::Permanent {
+                reason: "The path does not exist. Check that all parent directories are valid."
+                    .to_string(),
+            }
+        }
+        ErrorKind::PermissionDenied => {
+            tracing::debug!("IO error detail: {e}");
+            TransferError::Permanent {
+                reason: "Permission denied. Check file and directory permissions.".to_string(),
+            }
+        }
+        ErrorKind::ReadOnlyFilesystem => {
+            tracing::debug!("IO error detail: {e}");
+            TransferError::Permanent {
+                reason: "The filesystem is read-only.".to_string(),
+            }
+        }
+        ErrorKind::StorageFull => {
+            tracing::debug!("IO error detail: {e}");
+            TransferError::Permanent {
+                reason: "No space left on the disk.".to_string(),
+            }
+        }
+        ErrorKind::QuotaExceeded => {
+            tracing::debug!("IO error detail: {e}");
+            TransferError::Permanent {
+                reason: "Disk quota exceeded.".to_string(),
+            }
+        }
+        ErrorKind::FileTooLarge => {
+            tracing::debug!("IO error detail: {e}");
+            TransferError::Permanent {
+                reason: "The file is too large for the filesystem.".to_string(),
+            }
+        }
+        ErrorKind::IsADirectory => {
+            tracing::debug!("IO error detail: {e}");
+            TransferError::Permanent {
+                reason: "The destination is a directory, not a file.".to_string(),
+            }
+        }
+        ErrorKind::NotADirectory => {
+            tracing::debug!("IO error detail: {e}");
+            TransferError::Permanent {
+                reason: "A component of the path is not a directory.".to_string(),
+            }
+        }
+        ErrorKind::InvalidFilename => {
+            tracing::debug!("IO error detail: {e}");
+            TransferError::Permanent {
+                reason: "The filename is invalid.".to_string(),
+            }
+        }
+        // Remaining permanent failures — uncommon or already reasonably descriptive.
+        ErrorKind::ConnectionRefused
         | ErrorKind::WouldBlock
-        | ErrorKind::NotADirectory
-        | ErrorKind::IsADirectory
         | ErrorKind::DirectoryNotEmpty
         | ErrorKind::Unsupported
         | ErrorKind::UnexpectedEof
         | ErrorKind::OutOfMemory
         | ErrorKind::TooManyLinks
-        | ErrorKind::InvalidFilename
         | ErrorKind::CrossesDevices
         | ErrorKind::WriteZero
-        | ErrorKind::StorageFull
         | ErrorKind::NotSeekable
-        | ErrorKind::QuotaExceeded
-        | ErrorKind::FileTooLarge
         // The stale network file handle is not obviously retryable,
         // so we mark this as a permanent failure.
         // Any retry would need to be from scratch as we don't necessarily know how many bytes
@@ -231,4 +284,17 @@ mod tests {
             other => panic!("expected Transient, got: {other:?}"),
         }
     }
+
+    #[test]
+    fn test_map_io_error_friendly() {
+        let err = std::io::Error::new(ErrorKind::AlreadyExists, "File exists");
+        match map_io_error(err, 0) {
+            TransferError::Permanent { reason } => {
+                assert!(reason.contains("already exists"), "expected 'already exists', got: {reason}");
+                assert!(reason.contains("--overwrite"), "expected '--overwrite' hint, got: {reason}");
+            }
+            other => panic!("expected Permanent, got: {other:?}"),
+        }
+    }
+
 }

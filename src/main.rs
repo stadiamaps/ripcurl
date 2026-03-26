@@ -7,6 +7,7 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::fmt::format::DefaultFields;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::EnvFilter;
 use url::Url;
 
 #[derive(Parser)]
@@ -40,11 +41,21 @@ async fn main() -> ExitCode {
         let indicatif_layer = IndicatifLayer::new()
             .with_span_field_formatter(hide_indicatif_span_fields(DefaultFields::new()));
         tracing_subscriber::registry()
+            .with(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new("info")),
+            )
             .with(tracing_subscriber::fmt::layer().with_writer(indicatif_layer.get_stderr_writer()))
             .with(indicatif_layer.with_filter(IndicatifFilter::new(false)))
             .init();
     } else {
-        tracing_subscriber::fmt::init();
+        tracing_subscriber::registry()
+            .with(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new("info")),
+            )
+            .with(tracing_subscriber::fmt::layer())
+            .init();
     }
 
     let source_url = match parse_url(&cli.source) {
