@@ -140,6 +140,7 @@ impl TransferTest {
 
         let config = TransferConfig {
             max_retries: self.max_retries,
+            overwrite: false,
         };
 
         let url = Url::parse("http://test.invalid/file.bin").unwrap();
@@ -149,9 +150,8 @@ impl TransferTest {
         // Assert outcome
         match &self.expect {
             Expect::Succeeds => {
-                let bytes = result.unwrap_or_else(|e| {
-                    panic!("expected transfer to succeed, got error: {e:?}")
-                });
+                let bytes = result
+                    .unwrap_or_else(|e| panic!("expected transfer to succeed, got error: {e:?}"));
                 assert_eq!(
                     bytes, self.length as u64,
                     "transfer succeeded but byte count {bytes} != length {}",
@@ -178,9 +178,9 @@ impl TransferTest {
                         "expected permanent error containing \"{substring}\", got: \"{reason}\""
                     );
                 }
-                other => panic!(
-                    "expected PermanentError containing \"{substring}\", got: {other:?}"
-                ),
+                other => {
+                    panic!("expected PermanentError containing \"{substring}\", got: {other:?}")
+                }
             },
         }
 

@@ -224,7 +224,10 @@ async fn test_connection_drop_mid_stream() {
         Err(err) => {
             // Connection reset surfaced at request level — still a valid failure mode.
             assert!(
-                matches!(err, TransferError::Transient { .. } | TransferError::Permanent { .. }),
+                matches!(
+                    err,
+                    TransferError::Transient { .. } | TransferError::Permanent { .. }
+                ),
                 "unexpected error variant: {err:?}"
             );
         }
@@ -355,7 +358,6 @@ async fn test_redirect_to_different_server() {
     let expected = common::test_server::generate_content(content_size);
     assert_eq!(bytes, expected);
 }
-
 
 // Regression test:
 // `.expect()` used to panic when `get_reader(_, 0)` is called a second time

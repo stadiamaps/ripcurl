@@ -14,12 +14,8 @@ use url::Url;
 pub struct TransferConfig {
     /// Maximum number of retry attempts for transient errors.
     pub max_retries: u32,
-}
-
-impl Default for TransferConfig {
-    fn default() -> Self {
-        Self { max_retries: 10 }
-    }
+    /// If true, overwrite existing files at the destination.
+    pub overwrite: bool,
 }
 
 /// Retry an async operation on transient errors, using a shared retry budget.
@@ -71,8 +67,8 @@ pub async fn execute_transfer(
     config: &TransferConfig,
 ) -> Result<u64, TransferError> {
     match (
-        resolve_source(&source_url)?,
-        resolve_destination(&dest_url)?,
+        resolve_source(&source_url, config)?,
+        resolve_destination(&dest_url, config)?,
     ) {
         (crate::source::Source::Http(mut src), crate::destination::Destination::File(dest)) => {
             let writer = retry_transient!(3, dest.get_writer(dest_url.clone()))?;

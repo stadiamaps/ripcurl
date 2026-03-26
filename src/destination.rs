@@ -1,5 +1,6 @@
 use crate::protocol::file::{FileProtocol, WriteMode};
 use crate::protocol::{DestinationProtocol, DestinationWriter, TransferError};
+use crate::transfer::TransferConfig;
 use url::Url;
 
 /// A transfer destination.
@@ -7,13 +8,18 @@ pub enum Destination {
     File(FileProtocol),
 }
 
-// FIXME: This doesn't expose any sort of tuning / user preference.
-// We should have a standard way of communicating configuration/prefs to every protocol.
-// It's not super clear if this is even the right pattern. You effectively need to pass
-// the URL multiple times anyways. Maybe we should just construct the variants explicitly.
-pub fn resolve_destination(url: &Url) -> Result<Destination, TransferError> {
+pub fn resolve_destination(
+    url: &Url,
+    config: &TransferConfig,
+) -> Result<Destination, TransferError> {
+    let write_mode = if config.overwrite {
+        WriteMode::Overwrite
+    } else {
+        WriteMode::CreateNew
+    };
+
     match url.scheme() {
-        "file" => Ok(Destination::File(FileProtocol::new(WriteMode::CreateNew))),
+        "file" => Ok(Destination::File(FileProtocol::new(write_mode))),
         scheme => Err(TransferError::Permanent {
             reason: format!("unsupported destination protocol: {scheme}"),
         }),

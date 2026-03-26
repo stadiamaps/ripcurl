@@ -11,6 +11,14 @@ struct Cli {
 
     /// Destination URL for the file to be stored (schema-less URLs are assumed to be file://).
     destination: String,
+
+    /// Overwrite the destination if it already exists.
+    #[arg(long)]
+    overwrite: bool,
+
+    /// Maximum number of retry attempts for transient errors.
+    #[arg(long, default_value_t = 10)]
+    max_retries: u32,
 }
 
 #[tokio::main]
@@ -35,7 +43,10 @@ async fn main() -> ExitCode {
         }
     };
 
-    let config = ripcurl::transfer::TransferConfig::default();
+    let config = ripcurl::transfer::TransferConfig {
+        max_retries: cli.max_retries,
+        overwrite: cli.overwrite,
+    };
 
     match ripcurl::transfer::execute_transfer(source_url, dest_url, &config).await {
         Ok(bytes) => {

@@ -1,5 +1,7 @@
+use ripcurl::destination::resolve_destination;
 use ripcurl::protocol::file::{FileProtocol, WriteMode};
-use ripcurl::protocol::{DestinationProtocol, DestinationWriter};
+use ripcurl::protocol::{DestinationProtocol, DestinationWriter, TransferError};
+use ripcurl::transfer::TransferConfig;
 use tempfile::TempDir;
 use url::Url;
 
@@ -133,4 +135,54 @@ async fn test_invalid_scheme_rejected() {
     let result = proto.get_writer(url).await;
 
     assert!(result.is_err(), "non-file scheme should be rejected");
+}
+
+#[tokio::test]
+async fn test_resolve_destination_default_fails_if_file_exists() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("existing.txt");
+    std::fs::write(&path, b"hello").unwrap();
+
+    let config = TransferConfig {
+        max_retries: 10,
+        overwrite: false,
+    };
+    let dest = resolve_destination(&file_url(&path), &config).unwrap();
+    let result = dest.get_writer(file_url(&path)).await;
+
+    assert!(
+        result.is_err(),
+        "expected failure when file exists and overwrite is false"
+    );
+}
+
+#[tokio::test]
+async fn test_resolve_destination_overwrite_succeeds() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("existing.txt");
+    std::fs::write(&path, b"hello").unwrap();
+
+    let config = TransferConfig {
+        max_retries: 10,
+        overwrite: true,
+    };
+    let dest = resolve_destination(&file_url(&path), &config).unwrap();
+    let mut writer = dest.get_writer(file_url(&path)).await.unwrap();
+
+    writer.write(b"world").await.unwrap();
+    writer.finalize().await.unwrap();
+
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "world");
+}
+
+#[test]
+fn test_resolve_destination_rejects_unsupported_scheme() {
+    let url = Url::parse("foo://example.com/file.txt").unwrap();
+    let config = TransferConfig {
+        max_retries: 10,
+        overwrite: false,
+    };
+    let result = resolve_destination(&url, &config);
+
+    assert!(matches!(result, Err(TransferError::Permanent { .. })));
 }

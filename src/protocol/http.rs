@@ -608,10 +608,7 @@ mod tests {
 
     #[test]
     fn parse_content_range_total_normal() {
-        assert_eq!(
-            parse_content_range("bytes 500-999/5000"),
-            Some(5000)
-        );
+        assert_eq!(parse_content_range("bytes 500-999/5000"), Some(5000));
     }
 
     #[test]
@@ -626,9 +623,6 @@ mod tests {
 
     #[test]
     fn parse_content_range_total_zero_offset() {
-        assert_eq!(
-            parse_content_range("bytes 0-4999/5000"),
-            Some(5000)
-        );
+        assert_eq!(parse_content_range("bytes 0-4999/5000"), Some(5000));
     }
 }
