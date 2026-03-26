@@ -1,6 +1,12 @@
 use clap::Parser;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use tracing_indicatif::IndicatifLayer;
+use tracing_indicatif::filter::{IndicatifFilter, hide_indicatif_span_fields};
+use tracing_subscriber::Layer;
+use tracing_subscriber::fmt::format::DefaultFields;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use url::Url;
 
 #[derive(Parser)]
@@ -12,20 +18,34 @@ struct Cli {
     /// Destination URL for the file to be stored (schema-less URLs are assumed to be file://).
     destination: String,
 
-    /// Overwrite the destination if it already exists.
+    /// Overwrites the destination if it already exists.
     #[arg(long)]
     overwrite: bool,
 
     /// Maximum number of retry attempts for transient errors.
     #[arg(long, default_value_t = 10)]
     max_retries: u32,
+
+    /// Disables the progress bar.
+    #[arg(long)]
+    no_progress: bool,
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    tracing_subscriber::fmt::init();
-
     let cli = Cli::parse();
+
+    let show_progress = !cli.no_progress && !is_ci();
+    if show_progress {
+        let indicatif_layer = IndicatifLayer::new()
+            .with_span_field_formatter(hide_indicatif_span_fields(DefaultFields::new()));
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().with_writer(indicatif_layer.get_stderr_writer()))
+            .with(indicatif_layer.with_filter(IndicatifFilter::new(false)))
+            .init();
+    } else {
+        tracing_subscriber::fmt::init();
+    }
 
     let source_url = match parse_url(&cli.source) {
         Ok(url) => url,
@@ -62,6 +82,11 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Returns `true` if running in a CI environment.
+fn is_ci() -> bool {
+    std::env::var_os("CI").is_some()
 }
 
 /// Parse a CLI argument into a URL.

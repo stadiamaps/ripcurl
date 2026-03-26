@@ -6,8 +6,11 @@ use crate::protocol::{
 };
 use crate::source::resolve_source;
 use futures_util::StreamExt;
+use indicatif::ProgressStyle;
 use std::pin::pin;
 use std::time::Duration;
+use tracing::{Instrument, Span};
+use tracing_indicatif::span_ext::IndicatifSpanExt;
 use url::Url;
 
 /// Configuration for a transfer operation.
@@ -72,7 +75,12 @@ pub async fn execute_transfer(
     ) {
         (crate::source::Source::Http(mut src), crate::destination::Destination::File(dest)) => {
             let writer = retry_transient!(3, dest.get_writer(dest_url.clone()))?;
-            run_transfer(&mut src, writer, source_url, config).await
+            run_transfer(&mut src, writer, source_url, config)
+                .instrument(tracing::info_span!(
+                    "transfer",
+                    indicatif.pb_show = tracing::field::Empty
+                ))
+                .await
         }
     }
 }
@@ -99,6 +107,25 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
             source.get_reader(source_url.clone(), total_bytes_written)
         )?;
 
+        // Configure the progress bar based on whether total size is known.
+        let span = Span::current();
+        if let Some(total) = read_start.total_size {
+            span.pb_set_style(
+                &ProgressStyle::with_template(
+                    "{spinner:.green} [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})",
+                )
+                .unwrap()
+                .progress_chars("#>-"),
+            );
+            span.pb_set_length(total);
+            span.pb_set_position(total_bytes_written);
+        } else {
+            span.pb_set_style(
+                &ProgressStyle::with_template("{spinner:.green} {bytes} ({bytes_per_sec})")
+                    .unwrap(),
+            );
+        }
+
         // If the source is streaming from a different offset than we expected,
         // the destination must be reset.
         if read_start.offset != total_bytes_written {
@@ -116,6 +143,7 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
             );
             retry_transient!(3, writer.truncate_and_reset())?;
             total_bytes_written = 0;
+            Span::current().pb_set_position(0);
         }
 
         // Stream bytes from reader to writer.
@@ -129,6 +157,7 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
                 Ok(bytes) => match writer.write(&bytes).await {
                     Ok(()) => {
                         total_bytes_written += bytes.len() as u64;
+                        Span::current().pb_set_position(total_bytes_written);
                     }
                     Err(TransferError::Transient {
                         consumed_byte_count,
@@ -138,6 +167,7 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
                         // The writer tells us exactly how many bytes it has persisted.
                         // Sync our counter to reality and retry via the outer loop.
                         total_bytes_written = consumed_byte_count;
+                        Span::current().pb_set_position(total_bytes_written);
 
                         retry_count += 1;
                         if retry_count > config.max_retries {
