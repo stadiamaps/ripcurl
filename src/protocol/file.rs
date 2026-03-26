@@ -6,15 +6,25 @@
 use super::{DestinationProtocol, DestinationWriter, TransferError};
 use std::io::ErrorKind;
 use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use url::Url;
 
-// TODO: Specify if writes be direct overwrite or tmp atomic
-pub struct FileProtocol;
+/// Controls how the file destination writes data.
+pub enum WriteMode {
+    /// Write directly to the target path. Fails if the file already exists.
+    CreateNew,
+    /// Write directly to the target path. Overwrites if the file already exists.
+    Overwrite,
+    // TODO: Atomic: writes to a temp file and then renames atomically on finalize. Failed/corrupt clean up the temp file.
+}
+
+pub struct FileProtocol {
+    mode: WriteMode,
+}
 
 impl FileProtocol {
-    pub fn new() -> Self {
-        FileProtocol
+    pub fn new(mode: WriteMode) -> Self {
+        FileProtocol { mode }
     }
 }
 
@@ -28,17 +38,23 @@ impl DestinationProtocol for FileProtocol {
             });
         };
 
-        let path = url.to_file_path().map_err(|_| TransferError::Permanent {
+        let final_path = url.to_file_path().map_err(|_| TransferError::Permanent {
             reason: format!("URL ({url}) does not seem to be a file path"),
         })?;
 
-        let file = File::create_new(path)
-            .await
-            .map_err(|e| map_io_error(e, 0))?;
+        let file = match &self.mode {
+            WriteMode::CreateNew => File::create_new(&final_path)
+                .await
+                .map_err(|e| map_io_error(e, 0))?,
+            WriteMode::Overwrite => File::create(&final_path)
+                .await
+                .map_err(|e| map_io_error(e, 0))?,
+        };
 
         Ok(FileWriter {
             file,
             bytes_written: 0,
+            finalized: false,
         })
     }
 }
@@ -46,6 +62,7 @@ impl DestinationProtocol for FileProtocol {
 pub struct FileWriter {
     file: File,
     bytes_written: u64,
+    finalized: bool,
 }
 
 impl DestinationWriter for FileWriter {
@@ -80,10 +97,27 @@ impl DestinationWriter for FileWriter {
         self.file
             .flush()
             .await
-            .map_err(|e| map_io_error(e, self.bytes_written))
+            .map_err(|e| map_io_error(e, self.bytes_written))?;
+
+        self.finalized = true;
+        Ok(())
+    }
+
+    async fn truncate_and_reset(&mut self) -> Result<(), TransferError> {
+        self.file
+            .set_len(0)
+            .await
+            .map_err(|e| map_io_error(e, self.bytes_written))?;
+        self.file
+            .seek(std::io::SeekFrom::Start(0))
+            .await
+            .map_err(|e| map_io_error(e, self.bytes_written))?;
+        self.bytes_written = 0;
+        Ok(())
     }
 }
 
+/// Maps an I/O error to a [`TransferError`], classifying by error kind.
 fn map_io_error(e: std::io::Error, bytes_written: u64) -> TransferError {
     match e.kind() {
         // Transient failures
@@ -154,6 +188,23 @@ fn map_io_error(e: std::io::Error, bytes_written: u64) -> TransferError {
             TransferError::Permanent {
                 reason: e.to_string(),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_map_io_error_preserves_bytes_written() {
+        let err = std::io::Error::new(ErrorKind::Interrupted, "interrupted");
+        match map_io_error(err, 42) {
+            TransferError::Transient {
+                consumed_byte_count,
+                ..
+            } => assert_eq!(consumed_byte_count, 42),
+            other => panic!("expected Transient, got: {other:?}"),
         }
     }
 }

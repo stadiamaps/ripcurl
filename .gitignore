@@ -1,1 +1,5 @@
+# Build files
 /target
+
+# Temporary editor files
+*~

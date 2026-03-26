@@ -4,6 +4,7 @@ File transfers are hard.
 Ripcurl's goal is to make them easy,
 without needing to remember an alphabet soup of command line flags,
 or resort to writing loops in a shell script.
+With ripcurl, we want you to fall into the [pit of success](https://blog.codinghorror.com/falling-into-the-pit-of-success/).
 
 ## Goals
 
