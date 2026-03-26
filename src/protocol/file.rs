@@ -53,6 +53,7 @@ impl DestinationProtocol for FileProtocol {
 
         Ok(FileWriter {
             file,
+            path: final_path,
             bytes_written: 0,
             finalized: false,
         })
@@ -61,6 +62,7 @@ impl DestinationProtocol for FileProtocol {
 
 pub struct FileWriter {
     file: File,
+    path: std::path::PathBuf,
     bytes_written: u64,
     finalized: bool,
 }
@@ -114,6 +116,28 @@ impl DestinationWriter for FileWriter {
             .map_err(|e| map_io_error(e, self.bytes_written))?;
         self.bytes_written = 0;
         Ok(())
+    }
+}
+
+impl Drop for FileWriter {
+    fn drop(&mut self) {
+        if !self.finalized {
+            match std::fs::remove_file(&self.path) {
+                Ok(()) => {
+                    tracing::info!(
+                        path = %self.path.display(),
+                        "Cleaned up partial file (transfer was not finalized)"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        path = %self.path.display(),
+                        error = %e,
+                        "Failed to clean up partial file"
+                    );
+                }
+            }
+        }
     }
 }
 

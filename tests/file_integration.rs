@@ -22,27 +22,57 @@ async fn test_write_and_finalize() {
     assert_eq!(content, data);
 }
 
-// TODO: A test along these lines makes sense once we have an atomic mode.
-// #[tokio::test]
-// async fn test_drop_without_finalize_cleans_up() {
-//     let tmp = TempDir::new().unwrap();
-//     let dest = tmp.path().join("output.bin");
-//     // TODO: Do we know the name of the file?
-//     // let tmp_path = tmp.path().join(".output.bin.ripcurl-tmp");
+#[tokio::test]
+async fn test_drop_without_finalize_cleans_up() {
+    let tmp = TempDir::new().unwrap();
+    let dest = tmp.path().join("output.bin");
 
-//     {
-//         let proto = FileProtocol::new(WriteMode::Atomic);
-//         let mut writer = proto.get_writer(file_url(&dest)).await.unwrap();
-//         writer.write(b"incomplete data").await.unwrap();
+    {
+        let proto = FileProtocol::new(WriteMode::CreateNew);
+        let mut writer = proto.get_writer(file_url(&dest)).await.unwrap();
+        writer.write(b"incomplete data").await.unwrap();
+        // writer is dropped here without finalize
+    }
 
-//         // assert!(tmp_path.exists(), "temp file should exist during write");
-//         // writer is dropped here without finalize
-//     }
+    assert!(
+        !dest.exists(),
+        "partial file should be cleaned up on drop without finalize"
+    );
+}
 
-//     // // After drop: both files should be gone
-//     // assert!(!tmp_path.exists(), "temp file should be cleaned up on drop");
-//     assert!(!dest.exists(), "final file should not exist");
-// }
+#[tokio::test]
+async fn test_drop_cleanup_with_overwrite_mode() {
+    let tmp = TempDir::new().unwrap();
+    let dest = tmp.path().join("output.bin");
+
+    {
+        let proto = FileProtocol::new(WriteMode::Overwrite);
+        let mut writer = proto.get_writer(file_url(&dest)).await.unwrap();
+        writer.write(b"incomplete data").await.unwrap();
+        // writer is dropped here without finalize
+    }
+
+    assert!(
+        !dest.exists(),
+        "partial file should be cleaned up on drop without finalize (Overwrite mode)"
+    );
+}
+
+#[tokio::test]
+async fn test_finalized_file_not_cleaned_up() {
+    let tmp = TempDir::new().unwrap();
+    let dest = tmp.path().join("output.bin");
+
+    {
+        let proto = FileProtocol::new(WriteMode::CreateNew);
+        let mut writer = proto.get_writer(file_url(&dest)).await.unwrap();
+        writer.write(b"complete data").await.unwrap();
+        writer.finalize().await.unwrap();
+    }
+
+    assert!(dest.exists(), "finalized file should remain on disk");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"complete data");
+}
 
 #[tokio::test]
 async fn test_truncate_and_reset() {
