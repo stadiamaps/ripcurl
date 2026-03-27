@@ -3,4 +3,4 @@ test:
     cargo test --doc
 
 smoke-test:
-    cargo build && nu tests_integration/smoke.nu
+    cargo build && nu smoke.nu
