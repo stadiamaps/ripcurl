@@ -28,7 +28,7 @@ enum ProgressMode {
 }
 
 /// Resolved (non-auto) progress mode for runtime use.
-enum ResolvedProgress {
+enum ResolvedProgressMode {
     Bar,
     Log,
     None,
@@ -77,9 +77,9 @@ const LOG_PROGRESS_INTERVAL: Duration = Duration::from_secs(60);
 async fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    let resolved = resolve_progress_mode(cli.progress);
-    match resolved {
-        ResolvedProgress::Bar => {
+    let progress_mode = resolve_progress_mode(cli.progress);
+    match progress_mode {
+        ResolvedProgressMode::Bar => {
             let indicatif_layer = IndicatifLayer::new()
                 .with_span_field_formatter(hide_indicatif_span_fields(DefaultFields::new()));
             tracing_subscriber::registry()
@@ -91,7 +91,7 @@ async fn main() -> ExitCode {
                 .with(indicatif_layer.with_filter(IndicatifFilter::new(false)))
                 .init();
         }
-        ResolvedProgress::Log | ResolvedProgress::None => {
+        ResolvedProgressMode::Log | ResolvedProgressMode::None => {
             tracing_subscriber::registry()
                 .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
                 .with(tracing_subscriber::fmt::layer())
@@ -136,9 +136,9 @@ async fn main() -> ExitCode {
     };
 
     // Set up log-based progress if needed.
-    let progress_state = match resolved {
-        ResolvedProgress::Log => Some(Arc::new(ProgressState::new())),
-        ResolvedProgress::Bar | ResolvedProgress::None => None,
+    let progress_state = match progress_mode {
+        ResolvedProgressMode::Log => Some(Arc::new(ProgressState::new())),
+        ResolvedProgressMode::Bar | ResolvedProgressMode::None => None,
     };
 
     let log_handle = progress_state.as_ref().map(|ps| {
@@ -178,18 +178,18 @@ async fn main() -> ExitCode {
     }
 }
 
-fn resolve_progress_mode(mode: ProgressMode) -> ResolvedProgress {
+fn resolve_progress_mode(mode: ProgressMode) -> ResolvedProgressMode {
     match mode {
-        ProgressMode::Bar => ResolvedProgress::Bar,
-        ProgressMode::Log => ResolvedProgress::Log,
-        ProgressMode::None => ResolvedProgress::None,
+        ProgressMode::Bar => ResolvedProgressMode::Bar,
+        ProgressMode::Log => ResolvedProgressMode::Log,
+        ProgressMode::None => ResolvedProgressMode::None,
         ProgressMode::Auto => {
             if std::io::stderr().is_terminal() && !is_ci() {
-                ResolvedProgress::Bar
+                ResolvedProgressMode::Bar
             } else if is_ci() {
-                ResolvedProgress::Log
+                ResolvedProgressMode::Log
             } else {
-                ResolvedProgress::None
+                ResolvedProgressMode::None
             }
         }
     }
