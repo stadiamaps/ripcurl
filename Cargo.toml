@@ -5,6 +5,7 @@ edition = "2024"
 description = "Very persistent file transfers"
 license = "BSD-3-Clause"
 repository = "https://github.com/stadiamaps/ripcurl"
+authors = ["Ian Wagner <ian@stadiamaps.com>"]
 
 [[bin]]
 name = "ripcurl"
