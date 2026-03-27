@@ -1,3 +1,5 @@
+//! Transfer sources
+
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use url::Url;
 

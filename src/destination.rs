@@ -1,3 +1,5 @@
+//! Transfer destinations (where to write the file to)
+
 use crate::protocol::file::{FileProtocol, WriteMode};
 use crate::protocol::{DestinationProtocol, DestinationWriter, TransferError};
 use crate::transfer::TransferConfig;

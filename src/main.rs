@@ -1,3 +1,5 @@
+#![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
+
 use clap::Parser;
 use ripcurl::transfer::{ProgressState, format_progress_log};
 use std::io::IsTerminal;

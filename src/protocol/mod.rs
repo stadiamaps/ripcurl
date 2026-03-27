@@ -1,3 +1,5 @@
+//! Transfer protocol traits and implementations
+
 use bytes::Bytes;
 use futures_core::Stream;
 use std::future::Future;

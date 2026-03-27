@@ -5,7 +5,7 @@ Ripcurl's goal is to make them easy,
 without needing to remember an alphabet soup of command line flags,
 or resort to writing contorted loops in a shell script.
 
-# Quickstart
+## Quickstart
 
 ```
 ripcurl https://example.com/really-big-file.tar.gz /path/to/really-big-file.tar.gz
@@ -19,7 +19,7 @@ Without needing to ask, ripcurl will:
 - Show status updates, or not, depending on your environment (periodic logs in CI; animated progress in a TTY)
 - Cowardly refuse to overwrite an existing file unless you signal that's what you really wanted with `--overwrite`
 
-# Why would you want this?
+## Why would you want this?
 
 Even today, file transfers over the internet can be flaky.
 You probably don't notice this often for smaller transfers (up to a few gigabytes),
@@ -38,7 +38,7 @@ We like tools that "just work",
 so with ripcurl our aim is to create a [pit of success](https://blog.codinghorror.com/falling-into-the-pit-of-success/)
 rather than a labryinth of switches and manual orchestration.
 
-# Goals
+## Goals
 
 * **Sane defaults for transfers**. No need to specify that you want to follow redirects
   or other things that you _probably_ want, but usually forget to ask.
@@ -46,7 +46,7 @@ rather than a labryinth of switches and manual orchestration.
 * **Resilient.** Ripcurl will automatically retry failed transfers when possible.
 * **Well-tested.** Ripcurl has an extensive test suite covering dozens of cases we've seen in the wild.
 
-# Non-goals
+## Non-goals
 
 This is a focused, opinionated project.
 The following are non-goals:
@@ -58,16 +58,16 @@ The following are non-goals:
   If you want a CLI tool for interacting with everything from a REST API to streams,
   then other tools are a better fit.
 
-# FAQs
+## FAQs
 
-## What's with the name?
+### What's with the name?
 
 It's an homage to curl in the style of `ripgrep` or `ripunzip`.
 Don't read too much into it; it's not serious,
 and I mostly thought it sounded funny and "fast."
 It's also the name of an Australian surfwear company, apparently.
 
-## Why not <some other tool>
+### Why not `<some other tool>`
 
 - Most other tools don't automatically follows redirects.
 - Some other tools don't understand which headers are safe to forward cross-origin.
@@ -75,7 +75,7 @@ It's also the name of an Australian surfwear company, apparently.
   It's also a security problem.
 - Most other tools won't persistently retry to finish the transfer.
 
-## Why doesn't ripcurl do X?
+### Why doesn't ripcurl do X?
 
 See the non-goals section, probably.
 Other tools are better at these things.
