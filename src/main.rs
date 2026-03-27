@@ -164,9 +164,7 @@ async fn main() -> ExitCode {
     }
 
     match result {
-        Ok(_bytes) => {
-            ExitCode::SUCCESS
-        }
+        Ok(_bytes) => ExitCode::SUCCESS,
         Err(ripcurl::protocol::TransferError::Permanent { reason }) => {
             eprintln!("Transfer failed: {reason}");
             ExitCode::FAILURE
