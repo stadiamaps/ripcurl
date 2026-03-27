@@ -61,3 +61,4 @@ Do NOT use `tokio::time::pause()` in tests that do real HTTP I/O (integration te
 
 A log of significant architectural decisions is kept under `docs/decisions`
 using the lightweight Markdown ADR format.
+Keep ADRs short and to the point.

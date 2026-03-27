@@ -13,6 +13,32 @@ use tracing::{Instrument, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 use url::Url;
 
+/// Base delay for exponential backoff (before jitter).
+const BACKOFF_BASE: Duration = Duration::from_secs(1);
+/// Maximum delay cap for computed exponential backoff.
+const BACKOFF_MAX: Duration = Duration::from_secs(60);
+
+/// Calculate the retry delay using exponential backoff with jitter.
+///
+/// The exponential component (`base * 2^attempt ± 25% jitter`) is capped at [`BACKOFF_MAX`].
+/// The server-provided `retry_delay` (default zero) is then applied as a hard floor.
+/// We never wait *less* than what the server asked for,
+/// even if it exceeds our cap (per RFC 9110, `Retry-After` should be honored).
+fn backoff_delay(attempt: u32, server_hint: Duration) -> Duration {
+    // Exponential component: base * 2^attempt, saturating to avoid overflow.
+    let exp = BACKOFF_BASE.saturating_mul(1u32.checked_shl(attempt).unwrap_or(u32::MAX));
+
+    // Apply ±25% random jitter to the exponential component only.
+    let jitter_frac = rand::random_range(0.75..=1.25);
+    let jittered_exp = Duration::from_secs_f64(exp.as_secs_f64() * jitter_frac);
+
+    // Cap our own exponential delay, but not the server hint.
+    let capped_exp = jittered_exp.min(BACKOFF_MAX);
+
+    // Server hint is a hard floor — never wait less than the server asked.
+    capped_exp.max(server_hint)
+}
+
 /// Configuration for a transfer operation.
 pub struct TransferConfig {
     /// Maximum number of retry attempts for transient errors.
@@ -29,12 +55,12 @@ pub struct TransferConfig {
 /// borrows `&mut self` on a captured variable.
 macro_rules! retry_transient {
     ($max_retries:expr, $op:expr) => {{
-        let mut n_retries = 0;
+        let mut n_retries: u32 = 0;
         loop {
             match $op.await {
                 Ok(val) => break Ok(val),
                 Err(TransferError::Transient {
-                    retry_delay,
+                    retry_delay: server_hint,
                     reason,
                     ..
                 }) => {
@@ -47,12 +73,12 @@ macro_rules! retry_transient {
                             ),
                         });
                     }
-                    let retry_delay = retry_delay.min(Duration::from_secs(3));
+                    let delay = backoff_delay(n_retries - 1, server_hint);
                     tracing::warn!(
-                        "Transient error on attempt {}/{}: {reason}. Retrying after {retry_delay:?}.",
+                        "Transient error on attempt {}/{}: {reason}. Retrying after {delay:?}.",
                         n_retries, $max_retries
                     );
-                    tokio::time::sleep(retry_delay).await;
+                    tokio::time::sleep(delay).await;
                 }
                 Err(e) => break Err(e),
             }
@@ -163,7 +189,7 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
                     }
                     Err(TransferError::Transient {
                         consumed_byte_count,
-                        retry_delay,
+                        retry_delay: server_hint,
                         reason,
                     }) => {
                         // The writer tells us exactly how many bytes it has persisted.
@@ -181,11 +207,12 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
                             });
                         }
 
+                        let delay = backoff_delay(retry_count - 1, server_hint);
                         tracing::warn!(
-                            "Transient write error after {consumed_byte_count} bytes: {reason}. Will resume after {retry_delay:?}."
+                            "Transient write error after {consumed_byte_count} bytes: {reason}. Will resume after {delay:?}."
                         );
 
-                        tokio::time::sleep(retry_delay).await;
+                        tokio::time::sleep(delay).await;
                         stream_failed = true;
                         break;
                     }
@@ -194,7 +221,7 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
                 // Transient failure streaming
                 Err(TransferError::Transient {
                     consumed_byte_count: _,
-                    retry_delay,
+                    retry_delay: server_hint,
                     reason,
                 }) => {
                     retry_count += 1;
@@ -207,12 +234,13 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
                         });
                     }
 
+                    let delay = backoff_delay(retry_count - 1, server_hint);
                     tracing::warn!(
                         "Transient error during streaming on attempt {retry_count}/{}: {reason}. \
-                         Retrying after {retry_delay:?}.",
+                         Retrying after {delay:?}.",
                         config.max_retries
                     );
-                    tokio::time::sleep(retry_delay).await;
+                    tokio::time::sleep(delay).await;
                     stream_failed = true;
                     break;
                 }
@@ -234,4 +262,64 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
 
     tracing::info!("Transfer complete: {total_bytes_written} bytes written.");
     Ok(total_bytes_written)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_increases_exponentially() {
+        // Each successive attempt should produce a larger base delay
+        // (before jitter), so even the jittered values should trend upward.
+        let hint = Duration::ZERO;
+        let d0 = backoff_delay(0, hint);
+        let d1 = backoff_delay(1, hint);
+        let d2 = backoff_delay(2, hint);
+        let d3 = backoff_delay(3, hint);
+
+        // The un-jittered exponential values are 1s, 2s, 4s, 8s.
+        // With ±25% jitter the ranges are [0.75, 1.25], [1.5, 2.5], [3.0, 5.0], [6.0, 10.0].
+        // So each should be strictly greater than the previous lower-bound.
+        assert!(d0 >= Duration::from_millis(750), "d0={d0:?}");
+        assert!(d1 > d0, "d1={d1:?} should be > d0={d0:?}");
+        assert!(d2 > d1, "d2={d2:?} should be > d1={d1:?}");
+        assert!(d3 > d2, "d3={d3:?} should be > d2={d2:?}");
+    }
+
+    #[test]
+    fn backoff_respects_server_hint_as_floor() {
+        let server_hint = Duration::from_secs(30);
+
+        // Attempt 0: exponential would be ~1s, but server says 30s.
+        // Jitter only applies to the exponential component, so the
+        // server hint is a hard floor — we must never go below it.
+        let delay = backoff_delay(0, server_hint);
+        assert!(
+            delay >= server_hint,
+            "delay {delay:?} must be >= server hint {server_hint:?}"
+        );
+    }
+
+    #[test]
+    fn backoff_caps_at_maximum() {
+        // Very high attempt number should still be capped at BACKOFF_MAX.
+        let delay = backoff_delay(20, Duration::ZERO);
+        assert!(
+            delay <= BACKOFF_MAX,
+            "delay {delay:?} exceeds maximum {BACKOFF_MAX:?}"
+        );
+    }
+
+    #[test]
+    fn backoff_honors_server_hint_beyond_cap() {
+        // Server hints beyond BACKOFF_MAX are honored (per RFC 9110).
+        let huge_hint = Duration::from_secs(300);
+        let delay = backoff_delay(0, huge_hint);
+        assert!(
+            delay >= huge_hint,
+            "delay {delay:?} must honor server hint {huge_hint:?} even beyond cap"
+        );
+    }
+
 }
