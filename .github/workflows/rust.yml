@@ -1,0 +1,54 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  semver-checks:
+    runs-on: macos-15
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-rust-semver
+      cancel-in-progress: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check semver
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          manifest-path: common/Cargo.toml
+          feature-group: default-features
+
+  rustfmt:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-rust-rustfmt
+      cancel-in-progress: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: rustfmt checks
+        run: cargo fmt --check
+  
+  build:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-rust-build
+      cancel-in-progress: true
+    steps:
+    - uses: actions/checkout@v4
+    
+    - uses: taiki-e/install-action@nextest
+    - uses: taiki-e/install-action@just
+
+    - name: Build
+      run: cargo build --verbose
+      
+    - name: Run tests
+      run: just test-ci
