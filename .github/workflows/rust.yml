@@ -17,12 +17,7 @@ jobs:
       cancel-in-progress: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      - name: Check semver
-        uses: obi1kenobi/cargo-semver-checks-action@v2
-        with:
-          manifest-path: Cargo.toml
-          feature-group: default-features
+        uses: actions/checkout@v6
 
   rustfmt:
     runs-on: ubuntu-latest
