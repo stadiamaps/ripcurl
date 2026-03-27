@@ -7,7 +7,7 @@ or resort to writing contorted loops in a shell script.
 
 ## Quickstart
 
-```
+```shell
 ripcurl https://example.com/really-big-file.tar.gz /path/to/really-big-file.tar.gz
 ```
 

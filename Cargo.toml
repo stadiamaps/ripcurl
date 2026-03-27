@@ -6,6 +6,8 @@ description = "Very persistent file transfers"
 license = "BSD-3-Clause"
 repository = "https://github.com/stadiamaps/ripcurl"
 authors = ["Ian Wagner <ian@stadiamaps.com>"]
+keywords = ["cli", "curl", "download", "transfer"]
+categories = ["command-line-utilities", "network-programming"]
 
 [[bin]]
 name = "ripcurl"
