@@ -11,7 +11,7 @@ use tracing_subscriber::EnvFilter;
 use url::Url;
 
 #[derive(Parser)]
-#[command(name = "ripcurl", version)]
+#[command(name = "ripcurl", about, version)]
 struct Cli {
     /// Source URL of the file to transfer (schema-less URLs are assumed to be file://).
     source: String,
@@ -20,16 +20,30 @@ struct Cli {
     destination: String,
 
     /// Overwrites the destination if it already exists.
-    #[arg(long)]
+    #[arg(long, help_heading = "General Options")]
     overwrite: bool,
 
     /// Maximum number of retry attempts for transient errors.
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 10, help_heading = "General Options")]
     max_retries: u32,
 
     /// Disables the progress bar.
-    #[arg(long)]
+    #[arg(long, help_heading = "General Options")]
     no_progress: bool,
+
+    #[command(flatten)]
+    http: HttpOptions,
+}
+
+#[derive(clap::Args)]
+#[command(next_help_heading = "HTTP Options")]
+struct HttpOptions {
+    /// Custom HTTP header to include in source requests (format: "Name: Value").
+    ///
+    /// Can be specified multiple times. Sensitive headers like Authorization are
+    /// automatically stripped when following redirects to a different host.
+    #[arg(short = 'H', long = "header")]
+    headers: Vec<String>,
 }
 
 #[tokio::main]
@@ -74,9 +88,24 @@ async fn main() -> ExitCode {
         }
     };
 
+    let custom_http_headers: Vec<(String, String)> = match cli
+        .http
+        .headers
+        .iter()
+        .map(|h| parse_header(h))
+        .collect::<Result<_, _>>()
+    {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("Invalid header: {e}");
+            return ExitCode::from(3);
+        }
+    };
+
     let config = ripcurl::transfer::TransferConfig {
         max_retries: cli.max_retries,
         overwrite: cli.overwrite,
+        custom_http_headers,
     };
 
     match ripcurl::transfer::execute_transfer(source_url, dest_url, &config).await {
@@ -100,6 +129,20 @@ fn is_ci() -> bool {
     std::env::var_os("CI").is_some()
 }
 
+/// Parse a raw header string in "Name: Value" format into a (name, value) pair.
+fn parse_header(raw: &str) -> Result<(String, String), String> {
+    let (name, value) = raw
+        .split_once(':')
+        .ok_or_else(|| format!("expected \"Name: Value\" format, got \"{raw}\""))?;
+    
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(format!("header name cannot be empty in \"{raw}\""));
+    }
+    
+    Ok((name.to_string(), value.trim().to_string()))
+}
+
 /// Parse a CLI argument into a URL.
 ///
 /// If the argument already contains a scheme (e.g. `https://...`), parse it directly.
@@ -120,4 +163,51 @@ fn parse_url(input: &str) -> Result<Url, String> {
 
     Url::from_file_path(&abs_path)
         .map_err(|_| format!("could not convert path to URL: {}", abs_path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_header_basic() {
+        assert_eq!(
+            parse_header("Authorization: Bearer tok123").unwrap(),
+            ("Authorization".to_string(), "Bearer tok123".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_header_colons_in_value() {
+        assert_eq!(
+            parse_header("X-Data: has:colons:in:value").unwrap(),
+            ("X-Data".to_string(), "has:colons:in:value".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_header_trims_whitespace() {
+        assert_eq!(
+            parse_header("  Name  :  value  ").unwrap(),
+            ("Name".to_string(), "value".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_header_empty_value() {
+        assert_eq!(
+            parse_header("Name:").unwrap(),
+            ("Name".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn parse_header_missing_colon() {
+        assert!(parse_header("InvalidNoColon").is_err());
+    }
+
+    #[test]
+    fn parse_header_empty_name() {
+        assert!(parse_header(": value").is_err());
+    }
 }

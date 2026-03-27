@@ -19,6 +19,8 @@ pub struct TransferConfig {
     pub max_retries: u32,
     /// If true, overwrite existing files at the destination.
     pub overwrite: bool,
+    /// Custom HTTP headers to include in source requests (name, value pairs).
+    pub custom_http_headers: Vec<(String, String)>,
 }
 
 /// Retry an async operation on transient errors, using a shared retry budget.

@@ -141,6 +141,7 @@ impl TransferTest {
         let config = TransferConfig {
             max_retries: self.max_retries,
             overwrite: false,
+            custom_http_headers: vec![],
         };
 
         let url = Url::parse("http://test.invalid/file.bin").unwrap();

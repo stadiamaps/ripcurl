@@ -56,3 +56,8 @@ Schema-less URLs default to `file://`. Progress bar via tracing-indicatif (disab
 - **`tests_integration/smoke.nu`** — nushell script that runs the binary against httpbin.org.
 
 Do NOT use `tokio::time::pause()` in tests that do real HTTP I/O (integration tests with TestServer). It breaks reqwest's internal timeouts. Only use it in fully-mocked orchestration tests.
+
+### ADRs
+
+A log of significant architectural decisions is kept under `docs/decisions`
+using the lightweight Markdown ADR format.

@@ -20,6 +20,8 @@ const MAX_REDIRECTS: usize = 10;
 
 pub struct HttpSourceProtocol {
     client: reqwest::Client,
+    /// Custom headers to include in every request.
+    custom_headers: reqwest::header::HeaderMap,
     /// Cached metadata from previous responses. `None` before any request completes.
     server_meta: Option<ServerMeta>,
 }
@@ -132,7 +134,7 @@ impl std::fmt::Display for CachedStateConflict {
 }
 
 impl HttpSourceProtocol {
-    pub fn new() -> Result<Self, TransferError> {
+    pub fn new(custom_headers: reqwest::header::HeaderMap) -> Result<Self, TransferError> {
         let client = reqwest::Client::builder()
             .user_agent(format!("ripcurl/{}", env!("CARGO_PKG_VERSION")))
             // Connect timeout after which we retry
@@ -148,8 +150,18 @@ impl HttpSourceProtocol {
 
         Ok(Self {
             client,
+            custom_headers,
             server_meta: None,
         })
+    }
+
+    /// Creates a GET request builder with custom headers pre-applied.
+    fn build_get(&self, url: Url) -> reqwest::RequestBuilder {
+        let mut req = self.client.get(url);
+        for (name, value) in &self.custom_headers {
+            req = req.header(name, value);
+        }
+        req
     }
 
     /// Sends a plain GET request (no Range or conditional headers).
@@ -159,8 +171,7 @@ impl HttpSourceProtocol {
         url: Url,
     ) -> Result<(HttpSourceReader, ReadOffset), TransferError> {
         let response = self
-            .client
-            .get(url)
+            .build_get(url)
             .send()
             .await
             .map_err(|e| map_reqwest_error(e, 0))?;
@@ -268,7 +279,7 @@ impl SourceProtocol for HttpSourceProtocol {
         }
 
         // Build request with Range + conditional headers.
-        let mut request = self.client.get(url.clone()).header(
+        let mut request = self.build_get(url.clone()).header(
             reqwest::header::RANGE,
             format!("bytes={start_byte_offset}-"),
         );

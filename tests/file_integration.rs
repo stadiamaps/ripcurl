@@ -146,6 +146,7 @@ async fn test_resolve_destination_default_fails_if_file_exists() {
     let config = TransferConfig {
         max_retries: 10,
         overwrite: false,
+        custom_http_headers: vec![],
     };
     let dest = resolve_destination(&file_url(&path), &config).unwrap();
     let result = dest.get_writer(file_url(&path)).await;
@@ -165,6 +166,7 @@ async fn test_resolve_destination_overwrite_succeeds() {
     let config = TransferConfig {
         max_retries: 10,
         overwrite: true,
+        custom_http_headers: vec![],
     };
     let dest = resolve_destination(&file_url(&path), &config).unwrap();
     let mut writer = dest.get_writer(file_url(&path)).await.unwrap();
@@ -181,6 +183,7 @@ fn test_resolve_destination_rejects_unsupported_scheme() {
     let config = TransferConfig {
         max_retries: 10,
         overwrite: false,
+        custom_http_headers: vec![],
     };
     let result = resolve_destination(&url, &config);
 
