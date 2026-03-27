@@ -60,7 +60,7 @@ macro_rules! retry_transient {
             match $op.await {
                 Ok(val) => break Ok(val),
                 Err(TransferError::Transient {
-                    retry_delay: server_hint,
+                    minimum_retry_delay: server_hint,
                     reason,
                     ..
                 }) => {
@@ -76,7 +76,8 @@ macro_rules! retry_transient {
                     let delay = backoff_delay(n_retries - 1, server_hint);
                     tracing::warn!(
                         "Transient error on attempt {}/{}: {reason}. Retrying after {delay:?}.",
-                        n_retries, $max_retries
+                        n_retries,
+                        $max_retries
                     );
                     tokio::time::sleep(delay).await;
                 }
@@ -189,7 +190,7 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
                     }
                     Err(TransferError::Transient {
                         consumed_byte_count,
-                        retry_delay: server_hint,
+                        minimum_retry_delay: server_hint,
                         reason,
                     }) => {
                         // The writer tells us exactly how many bytes it has persisted.
@@ -221,7 +222,7 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
                 // Transient failure streaming
                 Err(TransferError::Transient {
                     consumed_byte_count: _,
-                    retry_delay: server_hint,
+                    minimum_retry_delay: server_hint,
                     reason,
                 }) => {
                     retry_count += 1;
@@ -321,5 +322,4 @@ mod tests {
             "delay {delay:?} must honor server hint {huge_hint:?} even beyond cap"
         );
     }
-
 }

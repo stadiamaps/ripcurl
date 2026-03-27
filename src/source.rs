@@ -22,11 +22,10 @@ pub fn resolve_source(url: &Url, config: &TransferConfig) -> Result<Source, Tran
 fn build_header_map(headers: &[(String, String)]) -> Result<HeaderMap, TransferError> {
     let mut map = HeaderMap::with_capacity(headers.len());
     for (name, value) in headers {
-        let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|e| {
-            TransferError::Permanent {
+        let header_name =
+            HeaderName::from_bytes(name.as_bytes()).map_err(|e| TransferError::Permanent {
                 reason: format!("invalid header name \"{name}\": {e}"),
-            }
-        })?;
+            })?;
         let header_value = HeaderValue::from_str(value).map_err(|e| TransferError::Permanent {
             reason: format!("invalid header value for \"{name}\": {e}"),
         })?;

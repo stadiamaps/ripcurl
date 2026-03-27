@@ -165,8 +165,11 @@ async fn test_429_with_retry_after() {
     // First call: 429
     let err = source.get_reader(server.url("/file"), 0).await.unwrap_err();
     match err {
-        TransferError::Transient { retry_delay, .. } => {
-            assert_eq!(retry_delay, Duration::from_secs(1));
+        TransferError::Transient {
+            minimum_retry_delay,
+            ..
+        } => {
+            assert_eq!(minimum_retry_delay, Duration::from_secs(1));
         }
         other => panic!("expected Transient, got: {other:?}"),
     }
@@ -545,11 +548,11 @@ async fn test_custom_headers_sent() {
 #[tokio::test]
 async fn test_custom_headers_sent_on_resume() {
     let content_size = 1000;
-    let server = TestServer::start(
-        ServerConfig::new(content_size, vec![]).with_fallback(RequestRule::Serve {
+    let server = TestServer::start(ServerConfig::new(content_size, vec![]).with_fallback(
+        RequestRule::Serve {
             support_ranges: true,
-        }),
-    )
+        },
+    ))
     .await;
 
     let mut headers = HeaderMap::new();
@@ -696,12 +699,12 @@ async fn test_resume_headers_survive_cross_server_redirect() {
     .await;
 
     // server1 (origin) always redirects to server2
-    let server1 = TestServer::start(
-        ServerConfig::new(0, vec![]).with_fallback(RequestRule::Redirect {
+    let server1 = TestServer::start(ServerConfig::new(0, vec![]).with_fallback(
+        RequestRule::Redirect {
             status: 302,
             location: server2.url("/file").to_string(),
-        }),
-    )
+        },
+    ))
     .await;
 
     let mut headers = HeaderMap::new();
@@ -876,12 +879,12 @@ async fn test_cross_server_redirect_etag_mismatch_triggers_restart() {
     .await;
 
     // Origin always redirects to CDN
-    let server1 = TestServer::start(
-        ServerConfig::new(0, vec![]).with_fallback(RequestRule::Redirect {
+    let server1 = TestServer::start(ServerConfig::new(0, vec![]).with_fallback(
+        RequestRule::Redirect {
             status: 302,
             location: server2.url("/file").to_string(),
-        }),
-    )
+        },
+    ))
     .await;
 
     let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
@@ -954,12 +957,12 @@ async fn test_412_through_redirect_triggers_restart() {
     .await;
 
     // Origin always redirects
-    let server1 = TestServer::start(
-        ServerConfig::new(0, vec![]).with_fallback(RequestRule::Redirect {
+    let server1 = TestServer::start(ServerConfig::new(0, vec![]).with_fallback(
+        RequestRule::Redirect {
             status: 302,
             location: server2.url("/file").to_string(),
-        }),
-    )
+        },
+    ))
     .await;
 
     let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
@@ -999,9 +1002,12 @@ async fn test_redirect_target_changes_between_requests() {
 
     // CDN node A
     let server2a = TestServer::start(
-        ServerConfig::new(content_size, vec![RequestRule::Serve {
-            support_ranges: true,
-        }])
+        ServerConfig::new(
+            content_size,
+            vec![RequestRule::Serve {
+                support_ranges: true,
+            }],
+        )
         .with_etag(Some("\"node-a-etag\"".to_string())),
     )
     .await;
@@ -1017,25 +1023,23 @@ async fn test_redirect_target_changes_between_requests() {
     .await;
 
     // Origin: first request → node A, subsequent requests → node B
-    let server1 = TestServer::start(
-        ServerConfig::new(0, vec![]).with_path_rules(
-            "/download",
-            vec![
-                RequestRule::Redirect {
-                    status: 302,
-                    location: server2a.url("/file").to_string(),
-                },
-                RequestRule::Redirect {
-                    status: 302,
-                    location: server2b.url("/file").to_string(),
-                },
-                RequestRule::Redirect {
-                    status: 302,
-                    location: server2b.url("/file").to_string(),
-                },
-            ],
-        ),
-    )
+    let server1 = TestServer::start(ServerConfig::new(0, vec![]).with_path_rules(
+        "/download",
+        vec![
+            RequestRule::Redirect {
+                status: 302,
+                location: server2a.url("/file").to_string(),
+            },
+            RequestRule::Redirect {
+                status: 302,
+                location: server2b.url("/file").to_string(),
+            },
+            RequestRule::Redirect {
+                status: 302,
+                location: server2b.url("/file").to_string(),
+            },
+        ],
+    ))
     .await;
 
     let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
@@ -1067,4 +1071,59 @@ async fn test_redirect_target_changes_between_requests() {
         2,
         "node B: mismatched resume + restart"
     );
+}
+
+/// Regression test: errors during body streaming via `bytes_stream()` are
+/// tagged as `is_decode()` by reqwest. These must be classified as transient
+/// so the transfer orchestrator can retry from the last good offset.
+#[tokio::test]
+async fn test_decode_error_mid_stream_is_transient() {
+    let content_size = 10_000;
+    let bytes_before_error = 5_000;
+    let server = TestServer::start(ServerConfig::new(
+        content_size,
+        vec![RequestRule::PartialThenError { bytes_before_error }],
+    ))
+    .await;
+
+    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let (reader, _offset) = source.get_reader(server.url("/file"), 0).await.unwrap();
+
+    // Stream bytes until we hit the error
+    let mut total = 0u64;
+    let mut stream = pin!(reader.stream_bytes());
+    let mut error = None;
+
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(bytes) => total += bytes.len() as u64,
+            Err(e) => {
+                error = Some(e);
+                break;
+            }
+        }
+    }
+
+    let err = error.expect("should have received a stream error");
+
+    match err {
+        TransferError::Transient {
+            consumed_byte_count,
+            minimum_retry_delay,
+            reason,
+        } => {
+            assert_eq!(
+                consumed_byte_count, total,
+                "consumed_byte_count should match bytes received before error"
+            );
+            assert_eq!(minimum_retry_delay, Duration::from_secs(1));
+            assert!(
+                reason.contains("decode"),
+                "error message should mention decode: {reason}"
+            );
+        }
+        TransferError::Permanent { reason } => {
+            panic!("BUG: decode error was classified as Permanent (should be Transient): {reason}");
+        }
+    }
 }

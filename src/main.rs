@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use tracing_indicatif::IndicatifLayer;
 use tracing_indicatif::filter::{IndicatifFilter, hide_indicatif_span_fields};
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::fmt::format::DefaultFields;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 use url::Url;
 
 #[derive(Parser)]
@@ -55,19 +55,13 @@ async fn main() -> ExitCode {
         let indicatif_layer = IndicatifLayer::new()
             .with_span_field_formatter(hide_indicatif_span_fields(DefaultFields::new()));
         tracing_subscriber::registry()
-            .with(
-                EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| EnvFilter::new("info")),
-            )
+            .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
             .with(tracing_subscriber::fmt::layer().with_writer(indicatif_layer.get_stderr_writer()))
             .with(indicatif_layer.with_filter(IndicatifFilter::new(false)))
             .init();
     } else {
         tracing_subscriber::registry()
-            .with(
-                EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| EnvFilter::new("info")),
-            )
+            .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
             .with(tracing_subscriber::fmt::layer())
             .init();
     }
@@ -134,12 +128,12 @@ fn parse_header(raw: &str) -> Result<(String, String), String> {
     let (name, value) = raw
         .split_once(':')
         .ok_or_else(|| format!("expected \"Name: Value\" format, got \"{raw}\""))?;
-    
+
     let name = name.trim();
     if name.is_empty() {
         return Err(format!("header name cannot be empty in \"{raw}\""));
     }
-    
+
     Ok((name.to_string(), value.trim().to_string()))
 }
 

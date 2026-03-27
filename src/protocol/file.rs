@@ -151,7 +151,7 @@ fn map_io_error(e: std::io::Error, bytes_written: u64) -> TransferError {
         | ErrorKind::ExecutableFileBusy
         | ErrorKind::Deadlock => TransferError::Transient {
             consumed_byte_count: bytes_written,
-            retry_delay: Default::default(),
+            minimum_retry_delay: Default::default(),
             reason: e.to_string(),
         },
         // Permanent failures with human-friendly messages
@@ -290,11 +290,16 @@ mod tests {
         let err = std::io::Error::new(ErrorKind::AlreadyExists, "File exists");
         match map_io_error(err, 0) {
             TransferError::Permanent { reason } => {
-                assert!(reason.contains("already exists"), "expected 'already exists', got: {reason}");
-                assert!(reason.contains("--overwrite"), "expected '--overwrite' hint, got: {reason}");
+                assert!(
+                    reason.contains("already exists"),
+                    "expected 'already exists', got: {reason}"
+                );
+                assert!(
+                    reason.contains("--overwrite"),
+                    "expected '--overwrite' hint, got: {reason}"
+                );
             }
             other => panic!("expected Permanent, got: {other:?}"),
         }
     }
-
 }

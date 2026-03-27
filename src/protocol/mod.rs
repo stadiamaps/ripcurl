@@ -17,7 +17,7 @@ pub enum TransferError {
     /// but for example, a timeout or broken pipe in HTTP
     /// are examples of transient errors.
     #[error(
-        "Transient error (retryable after {retry_delay:?}) after consuming {consumed_byte_count} bytes: {reason}."
+        "Transient error (retryable after at least {minimum_retry_delay:?}) after consuming {consumed_byte_count} bytes: {reason}."
     )]
     Transient {
         /// The number of bytes streamed from the source before the error occurred.
@@ -25,7 +25,7 @@ pub enum TransferError {
         /// The minimum amount of time to wait before retrying the operation.
         ///
         /// The orchestration layer *may* wait longer than this; this is simply a minimum.
-        retry_delay: Duration,
+        minimum_retry_delay: Duration,
         /// The reason for the failure.
         reason: String,
     },

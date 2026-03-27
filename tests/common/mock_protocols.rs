@@ -149,7 +149,7 @@ impl DestinationWriter for MockWriter {
                 return Err(match kind {
                     MockErrorKind::Transient { reason } => TransferError::Transient {
                         consumed_byte_count: consumed,
-                        retry_delay: Duration::from_millis(1),
+                        minimum_retry_delay: Duration::from_millis(1),
                         reason,
                     },
                     MockErrorKind::Permanent { reason } => TransferError::Permanent { reason },

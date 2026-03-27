@@ -343,19 +343,19 @@ fn map_reqwest_error(e: reqwest::Error, consumed_byte_count: u64) -> TransferErr
     if e.is_timeout() {
         TransferError::Transient {
             consumed_byte_count,
-            retry_delay: DEFAULT_RETRY_DELAY,
+            minimum_retry_delay: DEFAULT_RETRY_DELAY,
             reason: format!("request timed out: {e}"),
         }
     } else if e.is_connect() {
         TransferError::Transient {
             consumed_byte_count,
-            retry_delay: DEFAULT_RETRY_DELAY,
+            minimum_retry_delay: DEFAULT_RETRY_DELAY,
             reason: format!("connection failed: {e}"),
         }
     } else if e.is_body() {
         TransferError::Transient {
             consumed_byte_count,
-            retry_delay: Duration::from_secs(1),
+            minimum_retry_delay: Duration::from_secs(1),
             reason: format!("error reading response body: {e}"),
         }
     } else if e.is_redirect() {
@@ -367,7 +367,9 @@ fn map_reqwest_error(e: reqwest::Error, consumed_byte_count: u64) -> TransferErr
             reason: format!("request error: {e}"),
         }
     } else if e.is_decode() {
-        TransferError::Permanent {
+        TransferError::Transient {
+            consumed_byte_count,
+            minimum_retry_delay: Duration::from_secs(1),
             reason: format!("response decode error: {e}"),
         }
     } else {
@@ -414,12 +416,12 @@ fn classify_error_status_code(
         // Transient client errors
         StatusCode::REQUEST_TIMEOUT => TransferError::Transient {
             consumed_byte_count,
-            retry_delay: retry_after.unwrap_or(DEFAULT_RETRY_DELAY),
+            minimum_retry_delay: retry_after.unwrap_or(DEFAULT_RETRY_DELAY),
             reason,
         },
         StatusCode::TOO_MANY_REQUESTS => TransferError::Transient {
             consumed_byte_count,
-            retry_delay: retry_after.unwrap_or(RATE_LIMIT_RETRY_DELAY),
+            minimum_retry_delay: retry_after.unwrap_or(RATE_LIMIT_RETRY_DELAY),
             reason,
         },
 
@@ -429,7 +431,7 @@ fn classify_error_status_code(
         | StatusCode::SERVICE_UNAVAILABLE
         | StatusCode::GATEWAY_TIMEOUT => TransferError::Transient {
             consumed_byte_count,
-            retry_delay: retry_after.unwrap_or(DEFAULT_RETRY_DELAY),
+            minimum_retry_delay: retry_after.unwrap_or(DEFAULT_RETRY_DELAY),
             reason,
         },
 
@@ -442,27 +444,17 @@ fn classify_error_status_code(
 fn http_status_hint(status: StatusCode) -> Option<&'static str> {
     match status {
         StatusCode::BAD_REQUEST => Some("The server rejected the request."),
-        StatusCode::UNAUTHORIZED => {
-            Some("Authentication is required to access this resource.")
-        }
+        StatusCode::UNAUTHORIZED => Some("Authentication is required to access this resource."),
         StatusCode::FORBIDDEN => Some("Access to this resource is denied."),
         StatusCode::NOT_FOUND => {
             Some("The requested resource was not found. Check that the URL is correct.")
         }
-        StatusCode::METHOD_NOT_ALLOWED => {
-            Some("The HTTP method is not allowed for this resource.")
-        }
+        StatusCode::METHOD_NOT_ALLOWED => Some("The HTTP method is not allowed for this resource."),
         StatusCode::GONE => Some("The resource is no longer available at this URL."),
-        StatusCode::REQUEST_TIMEOUT => {
-            Some("The server timed out waiting for the request.")
-        }
+        StatusCode::REQUEST_TIMEOUT => Some("The server timed out waiting for the request."),
         StatusCode::TOO_MANY_REQUESTS => Some("Rate limited by the server."),
-        StatusCode::INTERNAL_SERVER_ERROR => {
-            Some("The server encountered an internal error.")
-        }
-        StatusCode::BAD_GATEWAY => {
-            Some("The server received an invalid response from upstream.")
-        }
+        StatusCode::INTERNAL_SERVER_ERROR => Some("The server encountered an internal error."),
+        StatusCode::BAD_GATEWAY => Some("The server received an invalid response from upstream."),
         StatusCode::SERVICE_UNAVAILABLE => {
             Some("The server is temporarily unavailable. Try again later.")
         }
@@ -532,7 +524,10 @@ mod tests {
     #[test]
     fn classify_status_408_transient() {
         match classify_error_status_code(StatusCode::REQUEST_TIMEOUT, None, 0) {
-            TransferError::Transient { retry_delay, .. } => {
+            TransferError::Transient {
+                minimum_retry_delay: retry_delay,
+                ..
+            } => {
                 assert_eq!(retry_delay, DEFAULT_RETRY_DELAY);
             }
             other => panic!("expected Transient, got: {other:?}"),
@@ -542,7 +537,10 @@ mod tests {
     #[test]
     fn classify_status_429_transient_with_default_delay() {
         match classify_error_status_code(StatusCode::TOO_MANY_REQUESTS, None, 0) {
-            TransferError::Transient { retry_delay, .. } => {
+            TransferError::Transient {
+                minimum_retry_delay: retry_delay,
+                ..
+            } => {
                 assert_eq!(retry_delay, RATE_LIMIT_RETRY_DELAY);
             }
             other => panic!("expected Transient, got: {other:?}"),
@@ -553,7 +551,10 @@ mod tests {
     fn classify_status_429_with_retry_after() {
         let custom_delay = Duration::from_secs(10);
         match classify_error_status_code(StatusCode::TOO_MANY_REQUESTS, Some(custom_delay), 0) {
-            TransferError::Transient { retry_delay, .. } => {
+            TransferError::Transient {
+                minimum_retry_delay: retry_delay,
+                ..
+            } => {
                 assert_eq!(retry_delay, custom_delay);
             }
             other => panic!("expected Transient, got: {other:?}"),
@@ -653,9 +654,15 @@ mod tests {
     fn test_classify_404_description() {
         match classify_error_status_code(StatusCode::NOT_FOUND, None, 0) {
             TransferError::Permanent { reason } => {
-                assert!(reason.contains("not found"), "expected 'not found', got: {reason}");
+                assert!(
+                    reason.contains("not found"),
+                    "expected 'not found', got: {reason}"
+                );
                 // Should have more than just the bare "HTTP 404 Not Found"
-                assert!(reason.len() > "HTTP 404 Not Found".len(), "expected description beyond status, got: {reason}");
+                assert!(
+                    reason.len() > "HTTP 404 Not Found".len(),
+                    "expected description beyond status, got: {reason}"
+                );
             }
             other => panic!("expected Permanent, got: {other:?}"),
         }
@@ -665,7 +672,10 @@ mod tests {
     fn test_classify_403_description() {
         match classify_error_status_code(StatusCode::FORBIDDEN, None, 0) {
             TransferError::Permanent { reason } => {
-                assert!(reason.to_lowercase().contains("denied"), "expected 'denied', got: {reason}");
+                assert!(
+                    reason.to_lowercase().contains("denied"),
+                    "expected 'denied', got: {reason}"
+                );
             }
             other => panic!("expected Permanent, got: {other:?}"),
         }
@@ -675,7 +685,10 @@ mod tests {
     fn test_classify_401_description() {
         match classify_error_status_code(StatusCode::UNAUTHORIZED, None, 0) {
             TransferError::Permanent { reason } => {
-                assert!(reason.to_lowercase().contains("auth"), "expected 'auth', got: {reason}");
+                assert!(
+                    reason.to_lowercase().contains("auth"),
+                    "expected 'auth', got: {reason}"
+                );
             }
             other => panic!("expected Permanent, got: {other:?}"),
         }
@@ -685,7 +698,10 @@ mod tests {
     fn test_classify_503_description() {
         match classify_error_status_code(StatusCode::SERVICE_UNAVAILABLE, None, 0) {
             TransferError::Transient { reason, .. } => {
-                assert!(reason.to_lowercase().contains("unavailable"), "expected 'unavailable', got: {reason}");
+                assert!(
+                    reason.to_lowercase().contains("unavailable"),
+                    "expected 'unavailable', got: {reason}"
+                );
             }
             other => panic!("expected Transient, got: {other:?}"),
         }
@@ -695,7 +711,10 @@ mod tests {
     fn test_classify_500_description() {
         match classify_error_status_code(StatusCode::INTERNAL_SERVER_ERROR, None, 0) {
             TransferError::Transient { reason, .. } => {
-                assert!(reason.to_lowercase().contains("internal error"), "expected 'internal error', got: {reason}");
+                assert!(
+                    reason.to_lowercase().contains("internal error"),
+                    "expected 'internal error', got: {reason}"
+                );
             }
             other => panic!("expected Transient, got: {other:?}"),
         }

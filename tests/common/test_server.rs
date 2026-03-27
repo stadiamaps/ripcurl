@@ -34,6 +34,8 @@ pub enum RequestRule {
     },
     /// Stream `bytes_before_drop` bytes of content, then abort the stream.
     PartialThenDrop { bytes_before_drop: usize },
+    /// Stream `bytes_before_error` bytes of content, then yield an error in the stream.
+    PartialThenError { bytes_before_error: usize },
     /// Serve full content with 200, ignoring any `Range` header.
     ServeIgnoringRange,
     /// Send a redirect response.
@@ -320,6 +322,40 @@ async fn apply_rule(
             // Advertise the full content-length but only send partial bytes,
             // then abruptly end the stream. This simulates a connection drop.
             let body_stream = stream::iter(vec![Ok::<_, std::io::Error>(partial)]);
+
+            let mut builder = Response::builder()
+                .status(StatusCode::OK)
+                .header("content-length", content.len().to_string());
+
+            if let Some(etag) = etag {
+                builder = builder.header("etag", etag);
+            }
+
+            builder
+                .body(Body::from_stream(body_stream))
+                .unwrap()
+                .into_response()
+        }
+
+        RequestRule::PartialThenError { bytes_before_error } => {
+            let partial = content[..bytes_before_error.min(content.len())].to_vec();
+
+            // Use a channel so we can control timing: send partial data first,
+            // yield to let it flush to the client, then send the error.
+            let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, std::io::Error>>(1);
+            tokio::spawn(async move {
+                tx.send(Ok(partial)).await.unwrap();
+                // Yield to ensure the partial data is flushed to the client
+                // before we send the error.
+                tokio::task::yield_now().await;
+                tx.send(Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "simulated stream error for testing",
+                )))
+                .await
+                .unwrap();
+            });
+            let body_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
 
             let mut builder = Response::builder()
                 .status(StatusCode::OK)

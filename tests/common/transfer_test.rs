@@ -271,7 +271,7 @@ impl AttemptBuilder {
     fn add_transient_error(&mut self, consumed: u64, reason: &str) {
         self.chunks.push(Err(TransferError::Transient {
             consumed_byte_count: consumed,
-            retry_delay: Duration::from_millis(1),
+            minimum_retry_delay: Duration::from_millis(1),
             reason: reason.into(),
         }));
     }
@@ -443,7 +443,7 @@ fn compile(data: &[u8], steps: &[Step], chunk_size: Option<usize>) -> Compiled {
                 expected_offsets.push(orch_offset as u64);
                 results.push(MockReaderResult::Err(TransferError::Transient {
                     consumed_byte_count: 0,
-                    retry_delay: Duration::from_millis(1),
+                    minimum_retry_delay: Duration::from_millis(1),
                     reason: reason.to_string(),
                 }));
             }
