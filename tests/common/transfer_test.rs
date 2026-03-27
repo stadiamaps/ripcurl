@@ -146,7 +146,8 @@ impl TransferTest {
 
         let url = Url::parse("http://test.invalid/file.bin").unwrap();
         let result =
-            ripcurl::transfer::run_transfer(&mut source, verifying_writer, url, &config).await;
+            ripcurl::transfer::run_transfer(&mut source, verifying_writer, url, &config, None)
+                .await;
 
         // Assert outcome
         match &self.expect {

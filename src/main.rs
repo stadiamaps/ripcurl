@@ -1,6 +1,10 @@
 use clap::Parser;
+use ripcurl::transfer::{ProgressState, format_progress_log};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Duration;
 use tracing_indicatif::IndicatifLayer;
 use tracing_indicatif::filter::{IndicatifFilter, hide_indicatif_span_fields};
 use tracing_subscriber::EnvFilter;
@@ -9,6 +13,26 @@ use tracing_subscriber::fmt::format::DefaultFields;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use url::Url;
+
+#[derive(Clone, Copy, Default, clap::ValueEnum)]
+enum ProgressMode {
+    /// Animated progress bar.
+    Bar,
+    /// Periodic updates with transfer stats.
+    Log,
+    /// Animated progress bar in interactive terminals; periodic log lines in CI; none otherwise.
+    #[default]
+    Auto,
+    /// No progress reporting.
+    None,
+}
+
+/// Resolved (non-auto) progress mode for runtime use.
+enum ResolvedProgress {
+    Bar,
+    Log,
+    None,
+}
 
 #[derive(Parser)]
 #[command(name = "ripcurl", about, version)]
@@ -27,9 +51,9 @@ struct Cli {
     #[arg(long, default_value_t = 10, help_heading = "General Options")]
     max_retries: u32,
 
-    /// Disables the progress bar.
-    #[arg(long, help_heading = "General Options")]
-    no_progress: bool,
+    /// Progress reporting mode.
+    #[arg(long, default_value_t, value_enum, help_heading = "General Options")]
+    progress: ProgressMode,
 
     #[command(flatten)]
     http: HttpOptions,
@@ -46,24 +70,33 @@ struct HttpOptions {
     headers: Vec<String>,
 }
 
+const LOG_PROGRESS_INITIAL_DELAY: Duration = Duration::from_secs(10);
+const LOG_PROGRESS_INTERVAL: Duration = Duration::from_secs(60);
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    let show_progress = !cli.no_progress && !is_ci();
-    if show_progress {
-        let indicatif_layer = IndicatifLayer::new()
-            .with_span_field_formatter(hide_indicatif_span_fields(DefaultFields::new()));
-        tracing_subscriber::registry()
-            .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-            .with(tracing_subscriber::fmt::layer().with_writer(indicatif_layer.get_stderr_writer()))
-            .with(indicatif_layer.with_filter(IndicatifFilter::new(false)))
-            .init();
-    } else {
-        tracing_subscriber::registry()
-            .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-            .with(tracing_subscriber::fmt::layer())
-            .init();
+    let resolved = resolve_progress_mode(cli.progress);
+    match resolved {
+        ResolvedProgress::Bar => {
+            let indicatif_layer = IndicatifLayer::new()
+                .with_span_field_formatter(hide_indicatif_span_fields(DefaultFields::new()));
+            tracing_subscriber::registry()
+                .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(indicatif_layer.get_stderr_writer()),
+                )
+                .with(indicatif_layer.with_filter(IndicatifFilter::new(false)))
+                .init();
+        }
+        ResolvedProgress::Log | ResolvedProgress::None => {
+            tracing_subscriber::registry()
+                .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+                .with(tracing_subscriber::fmt::layer())
+                .init();
+        }
     }
 
     let source_url = match parse_url(&cli.source) {
@@ -102,9 +135,36 @@ async fn main() -> ExitCode {
         custom_http_headers,
     };
 
-    match ripcurl::transfer::execute_transfer(source_url, dest_url, &config).await {
-        Ok(bytes) => {
-            eprintln!("Done — {bytes} bytes transferred.");
+    // Set up log-based progress if needed.
+    let progress_state = match resolved {
+        ResolvedProgress::Log => Some(Arc::new(ProgressState::new())),
+        ResolvedProgress::Bar | ResolvedProgress::None => None,
+    };
+
+    let log_handle = progress_state.as_ref().map(|ps| {
+        let ps = Arc::clone(ps);
+        tokio::spawn(async move {
+            tokio::time::sleep(LOG_PROGRESS_INITIAL_DELAY).await;
+            loop {
+                let bytes = ps.bytes_written();
+                let total = ps.total_size();
+                let elapsed = ps.elapsed();
+                tracing::info!("{}", format_progress_log(bytes, total, elapsed));
+                tokio::time::sleep(LOG_PROGRESS_INTERVAL).await;
+            }
+        })
+    });
+
+    let result =
+        ripcurl::transfer::execute_transfer(source_url, dest_url, &config, progress_state).await;
+
+    // Cancel the log timer.
+    if let Some(handle) = log_handle {
+        handle.abort();
+    }
+
+    match result {
+        Ok(_bytes) => {
             ExitCode::SUCCESS
         }
         Err(ripcurl::protocol::TransferError::Permanent { reason }) => {
@@ -114,6 +174,23 @@ async fn main() -> ExitCode {
         Err(ripcurl::protocol::TransferError::Transient { reason, .. }) => {
             eprintln!("Transfer failed: {reason}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+fn resolve_progress_mode(mode: ProgressMode) -> ResolvedProgress {
+    match mode {
+        ProgressMode::Bar => ResolvedProgress::Bar,
+        ProgressMode::Log => ResolvedProgress::Log,
+        ProgressMode::None => ResolvedProgress::None,
+        ProgressMode::Auto => {
+            if std::io::stderr().is_terminal() && !is_ci() {
+                ResolvedProgress::Bar
+            } else if is_ci() {
+                ResolvedProgress::Log
+            } else {
+                ResolvedProgress::None
+            }
         }
     }
 }

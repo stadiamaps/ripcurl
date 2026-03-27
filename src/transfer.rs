@@ -6,9 +6,11 @@ use crate::protocol::{
 };
 use crate::source::resolve_source;
 use futures_util::StreamExt;
-use indicatif::ProgressStyle;
+use indicatif::{HumanBytes, HumanDuration, ProgressStyle};
 use std::pin::pin;
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use tracing::{Instrument, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 use url::Url;
@@ -47,6 +49,80 @@ pub struct TransferConfig {
     pub overwrite: bool,
     /// Custom HTTP headers to include in source requests (name, value pairs).
     pub custom_http_headers: Vec<(String, String)>,
+}
+
+/// Shared progress state for log-based progress reporting.
+pub struct ProgressState {
+    /// Total number of bytes written so far.
+    bytes_written: AtomicU64,
+    /// Total expected size in bytes. 0 means unknown.
+    total_size: AtomicU64,
+    /// The time the transfer started.
+    start_time: Instant,
+}
+
+impl ProgressState {
+    pub fn new() -> Self {
+        Self {
+            bytes_written: AtomicU64::new(0),
+            total_size: AtomicU64::new(0),
+            start_time: Instant::now(),
+        }
+    }
+
+    fn update_bytes_written(&self, bytes: u64) {
+        self.bytes_written.store(bytes, Ordering::Relaxed);
+    }
+
+    fn update_total_size(&self, total: u64) {
+        self.total_size.store(total, Ordering::Relaxed);
+    }
+
+    pub fn bytes_written(&self) -> u64 {
+        self.bytes_written.load(Ordering::Relaxed)
+    }
+
+    pub fn total_size(&self) -> u64 {
+        self.total_size.load(Ordering::Relaxed)
+    }
+
+    pub fn elapsed(&self) -> Duration {
+        self.start_time.elapsed()
+    }
+}
+
+/// Format a progress log line from the current state.
+///
+/// Returns a human-readable string with percentage (if the total size is known),
+/// number of bytes transferred, speed, and ETA.
+pub fn format_progress_log(bytes_written: u64, total_size: u64, elapsed: Duration) -> String {
+    let speed = if elapsed.as_secs_f64() > 0.0 {
+        bytes_written as f64 / elapsed.as_secs_f64()
+    } else {
+        0.0
+    };
+    let speed_display = HumanBytes(speed as u64);
+
+    if total_size > 0 {
+        let pct = (bytes_written as f64 / total_size as f64) * 100.0;
+        let eta = if speed > 0.0 {
+            let remaining = total_size.saturating_sub(bytes_written);
+            let eta_secs = remaining as f64 / speed;
+            format!(", ETA {}", HumanDuration(Duration::from_secs_f64(eta_secs)))
+        } else {
+            String::new()
+        };
+        format!(
+            "Progress: {pct:.1}% ({} / {}) at {speed_display}/s{eta}",
+            HumanBytes(bytes_written),
+            HumanBytes(total_size),
+        )
+    } else {
+        format!(
+            "Progress: {} transferred at {speed_display}/s",
+            HumanBytes(bytes_written),
+        )
+    }
 }
 
 /// Retry an async operation on transient errors, using a shared retry budget.
@@ -97,6 +173,7 @@ pub async fn execute_transfer(
     source_url: Url,
     dest_url: Url,
     config: &TransferConfig,
+    progress: Option<Arc<ProgressState>>,
 ) -> Result<u64, TransferError> {
     match (
         resolve_source(&source_url, config)?,
@@ -104,7 +181,7 @@ pub async fn execute_transfer(
     ) {
         (crate::source::Source::Http(mut src), crate::destination::Destination::File(dest)) => {
             let writer = retry_transient!(3, dest.get_writer(dest_url.clone()))?;
-            run_transfer(&mut src, writer, source_url, config)
+            run_transfer(&mut src, writer, source_url, config, progress)
                 .instrument(tracing::info_span!(
                     "transfer",
                     indicatif.pb_show = tracing::field::Empty
@@ -123,6 +200,7 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
     mut writer: W,
     source_url: Url,
     config: &TransferConfig,
+    progress: Option<Arc<ProgressState>>,
 ) -> Result<u64, TransferError> {
     let mut retry_count: u32 = 0;
     let mut total_bytes_written: u64 = 0;
@@ -148,6 +226,10 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
             );
             span.pb_set_length(total);
             span.pb_set_position(total_bytes_written);
+            if let Some(ref ps) = progress {
+                ps.update_total_size(total);
+                ps.update_bytes_written(total_bytes_written);
+            }
         } else {
             span.pb_set_style(
                 &ProgressStyle::with_template("{spinner:.green} {bytes} ({bytes_per_sec})")
@@ -171,8 +253,13 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
                 "Source streaming from the start (we requested offset {total_bytes_written}). This source probably does not support range transfers. Restarting the transfer from the start."
             );
             retry_transient!(3, writer.truncate_and_reset())?;
+
+            // Reset counters
             total_bytes_written = 0;
             Span::current().pb_set_position(0);
+            if let Some(ref ps) = progress {
+                ps.update_bytes_written(0);
+            }
         }
 
         // Stream bytes from reader to writer.
@@ -187,6 +274,9 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
                     Ok(()) => {
                         total_bytes_written += bytes.len() as u64;
                         Span::current().pb_set_position(total_bytes_written);
+                        if let Some(ref ps) = progress {
+                            ps.update_bytes_written(total_bytes_written);
+                        }
                     }
                     Err(TransferError::Transient {
                         consumed_byte_count,
@@ -197,6 +287,9 @@ pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
                         // Sync our counter to reality and retry via the outer loop.
                         total_bytes_written = consumed_byte_count;
                         Span::current().pb_set_position(total_bytes_written);
+                        if let Some(ref ps) = progress {
+                            ps.update_bytes_written(total_bytes_written);
+                        }
 
                         retry_count += 1;
                         if retry_count > config.max_retries {
@@ -321,5 +414,38 @@ mod tests {
             delay >= huge_hint,
             "delay {delay:?} must honor server hint {huge_hint:?} even beyond cap"
         );
+    }
+
+    #[test]
+    fn progress_log_with_known_total() {
+        let msg = format_progress_log(500_000_000, 1_000_000_000, Duration::from_secs(50));
+        assert!(msg.contains("50.0%"), "expected percentage, got: {msg}");
+        assert!(msg.contains("MiB"), "expected MiB unit, got: {msg}");
+        assert!(msg.contains("/s"), "expected speed, got: {msg}");
+        assert!(msg.contains("ETA"), "expected ETA, got: {msg}");
+    }
+
+    #[test]
+    fn progress_log_unknown_total() {
+        let msg = format_progress_log(500_000_000, 0, Duration::from_secs(50));
+        assert!(
+            msg.contains("transferred"),
+            "expected 'transferred', got: {msg}"
+        );
+        assert!(!msg.contains('%'), "should not have percentage, got: {msg}");
+        assert!(!msg.contains("ETA"), "should not have ETA, got: {msg}");
+    }
+
+    #[test]
+    fn progress_log_zero_elapsed() {
+        // Should not panic on zero elapsed time.
+        let msg = format_progress_log(0, 1000, Duration::ZERO);
+        assert!(msg.contains("0.0%"), "expected 0%, got: {msg}");
+    }
+
+    #[test]
+    fn progress_log_complete() {
+        let msg = format_progress_log(1000, 1000, Duration::from_secs(10));
+        assert!(msg.contains("100.0%"), "expected 100%, got: {msg}");
     }
 }
