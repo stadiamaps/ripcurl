@@ -26,7 +26,7 @@ const BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// The server-provided `retry_delay` (default zero) is then applied as a hard floor.
 /// We never wait *less* than what the server asked for,
 /// even if it exceeds our cap (per RFC 9110, `Retry-After` should be honored).
-fn backoff_delay(attempt: u32, server_hint: Duration) -> Duration {
+pub(crate) fn backoff_delay(attempt: u32, server_hint: Duration) -> Duration {
     // Exponential component: base * 2^attempt, saturating to avoid overflow.
     let exp = BACKOFF_BASE.saturating_mul(1u32.checked_shl(attempt).unwrap_or(u32::MAX));
 
@@ -59,6 +59,12 @@ pub struct ProgressState {
     total_size: AtomicU64,
     /// The time the transfer started.
     start_time: Instant,
+}
+
+impl Default for ProgressState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ProgressState {
@@ -128,28 +134,31 @@ pub fn format_progress_log(bytes_written: u64, total_size: u64, elapsed: Duratio
 /// Retry an async operation on transient errors, using a shared retry budget.
 ///
 /// This is a macro rather than a function because the retried expression often
-/// borrows `&mut self` on a captured variable.
+/// borrows `&mut self` on a captured variable (which prevents
+/// the expression from being wrapped in a closure).
+#[doc(hidden)]
+#[macro_export]
 macro_rules! retry_transient {
     ($max_retries:expr, $op:expr) => {{
         let mut n_retries: u32 = 0;
         loop {
             match $op.await {
                 Ok(val) => break Ok(val),
-                Err(TransferError::Transient {
+                Err($crate::protocol::TransferError::Transient {
                     minimum_retry_delay: server_hint,
                     reason,
                     ..
                 }) => {
                     n_retries += 1;
                     if n_retries > $max_retries {
-                        break Err(TransferError::Permanent {
+                        break Err($crate::protocol::TransferError::Permanent {
                             reason: format!(
                                 "exhausted {} retries (last error: {reason})",
                                 $max_retries
                             ),
                         });
                     }
-                    let delay = backoff_delay(n_retries - 1, server_hint);
+                    let delay = $crate::transfer::backoff_delay(n_retries - 1, server_hint);
                     tracing::warn!(
                         "Transient error on attempt {}/{}: {reason}. Retrying after {delay:?}.",
                         n_retries,

@@ -49,6 +49,11 @@ pub struct ReadOffset {
     pub offset: u64,
     /// Total size of the resource, if known.
     pub total_size: Option<u64>,
+    /// Whether the source supports random access (reading from an arbitrary byte offset).
+    ///
+    /// Streaming destinations like stdout require sources with random access,
+    /// whereas others can tolerate restarting from zero.
+    pub supports_random_access: bool,
 }
 
 /// `SourceProtocol`s can be used as a source for a file transfer.
@@ -70,7 +75,7 @@ pub trait SourceProtocol {
         &mut self,
         url: Url,
         start_byte_offset: u64,
-    ) -> impl Future<Output = Result<(Self::Reader, ReadOffset), TransferError>>;
+    ) -> impl Future<Output = Result<(Self::Reader, ReadOffset), TransferError>> + Send;
 }
 
 pub trait SourceReader {
@@ -79,7 +84,7 @@ pub trait SourceReader {
     /// Consumes the reader into a stream that yields bytes as they become available.
     /// The orchestration layer handles retries transparently for all implementations,
     /// requesting a new reader (with an updated byte range) from the protocol.
-    fn stream_bytes(self) -> impl Stream<Item = Result<Bytes, TransferError>>;
+    fn stream_bytes(self) -> impl Stream<Item = Result<Bytes, TransferError>> + Send;
 }
 
 /// `SourceProtocol`s can be used as a source for a file transfer.

@@ -17,7 +17,7 @@ use url::Url;
 use super::mock_protocols::{MockReaderResult, MockSource, MockWriter};
 
 /// Generate a deterministic byte pattern: `[0, 1, 2, ..., 255, 0, 1, ...]`.
-fn generate_pattern(len: usize) -> Vec<u8> {
+pub fn generate_pattern(len: usize) -> Vec<u8> {
     (0..len).map(|i| (i % 256) as u8).collect()
 }
 
@@ -287,6 +287,7 @@ impl AttemptBuilder {
         MockReaderResult::Ok {
             offset: self.offset,
             total_size: Some(self.total_size),
+            supports_random_access: true,
             chunks: self.chunks,
         }
     }

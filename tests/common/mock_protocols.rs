@@ -25,6 +25,8 @@ pub enum MockReaderResult {
         offset: u64,
         /// Total resource size (if known).
         total_size: Option<u64>,
+        /// Whether the source supports byte-range resume.
+        supports_random_access: bool,
         /// Chunks the reader will yield.
         chunks: Vec<Result<Bytes, TransferError>>,
     },
@@ -61,8 +63,16 @@ impl SourceProtocol for MockSource {
                 MockReaderResult::Ok {
                     offset,
                     total_size,
+                    supports_random_access,
                     chunks,
-                } => Ok((MockReader { chunks }, ReadOffset { offset, total_size })),
+                } => Ok((
+                    MockReader { chunks },
+                    ReadOffset {
+                        offset,
+                        total_size,
+                        supports_random_access,
+                    },
+                )),
                 MockReaderResult::Err(e) => Err(e),
             }
         }

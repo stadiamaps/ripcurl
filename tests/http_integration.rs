@@ -1073,6 +1073,71 @@ async fn test_redirect_target_changes_between_requests() {
     );
 }
 
+// Streaming API integration tests
+
+#[tokio::test]
+async fn test_stream_source_with_accept_ranges() {
+    let content_size = 5_000;
+    let server = TestServer::start(ServerConfig::new(
+        content_size,
+        vec![RequestRule::Serve {
+            support_ranges: true,
+        }],
+    ))
+    .await;
+
+    let config = ripcurl::transfer::TransferConfig {
+        max_retries: 3,
+        overwrite: false,
+        custom_http_headers: vec![],
+    };
+
+    let (stream, info) = ripcurl::stream::stream_from_url(server.url("/file"), &config)
+        .await
+        .unwrap();
+
+    assert_eq!(info.total_size, Some(content_size as u64));
+
+    let mut stream = pin!(stream);
+    let mut bytes = Vec::new();
+    while let Some(result) = stream.next().await {
+        bytes.extend_from_slice(&result.unwrap());
+    }
+
+    let expected = common::test_server::generate_content(content_size);
+    assert_eq!(bytes, expected);
+}
+
+#[tokio::test]
+async fn test_stream_source_rejects_no_accept_ranges() {
+    let content_size = 5_000;
+    let server = TestServer::start(ServerConfig::new(
+        content_size,
+        vec![RequestRule::Serve {
+            support_ranges: false,
+        }],
+    ))
+    .await;
+
+    let config = ripcurl::transfer::TransferConfig {
+        max_retries: 3,
+        overwrite: false,
+        custom_http_headers: vec![],
+    };
+
+    // NB: the test server does not send `Accept-Ranges: bytes`.
+    match ripcurl::stream::stream_from_url(server.url("/file"), &config).await {
+        Err(TransferError::Permanent { reason }) => {
+            assert!(
+                reason.contains("random access"),
+                "expected 'random access' in error, got: {reason}"
+            );
+        }
+        Err(other) => panic!("expected Permanent error about random access, got: {other:?}"),
+        Ok(_) => panic!("expected error for source without random access, got Ok"),
+    }
+}
+
 /// Regression test: errors during body streaming via `bytes_stream()` are
 /// tagged as `is_decode()` by reqwest. These must be classified as transient
 /// so the transfer orchestrator can retry from the last good offset.
