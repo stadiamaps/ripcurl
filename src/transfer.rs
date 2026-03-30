@@ -192,6 +192,28 @@ macro_rules! retry_transient {
 /// Returns [`TransferError::Permanent`] if the URL scheme is unsupported,
 /// custom headers are invalid, the transfer fails with an unrecoverable error,
 /// or all retry attempts are exhausted.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ripcurl::transfer::{TransferConfig, execute_transfer};
+/// use url::Url;
+///
+/// # tokio::runtime::Runtime::new().unwrap().block_on(async {
+/// let source = Url::parse("https://example.com/big-file.tar.gz").unwrap();
+/// let dest = Url::parse("file:///tmp/big-file.tar.gz").unwrap();
+///
+/// let config = TransferConfig {
+///     max_retries: 10,
+///     overwrite: false,
+///     custom_http_headers: vec![],
+/// };
+///
+/// let bytes_written = execute_transfer(source, dest, &config, None).await?;
+/// println!("Transferred {bytes_written} bytes");
+/// # Ok::<(), ripcurl::protocol::TransferError>(())
+/// # });
+/// ```
 pub async fn execute_transfer(
     source_url: Url,
     dest_url: Url,
@@ -219,10 +241,43 @@ pub async fn execute_transfer(
 /// Streams bytes from `source` to `writer`, retrying transient errors
 /// and handling offset mismatches (e.g. servers that don't support range requests).
 ///
+/// Note that [`execute_transfer`] provides a simpler interface,
+/// resolving sources and destinations from URLs automatically.
+/// Use `run_transfer` when you need to supply your own protocol implementations.
+///
 /// # Errors
 ///
 /// Returns [`TransferError::Permanent`] when the source or writer encounters
 /// an unrecoverable error, or when all retry attempts are exhausted.
+///
+/// # Examples
+///
+/// ```no_run
+/// use ripcurl::protocol::http::HttpSourceProtocol;
+/// use ripcurl::protocol::file::{FileProtocol, WriteMode};
+/// use ripcurl::protocol::DestinationProtocol;
+/// use ripcurl::transfer::{TransferConfig, run_transfer};
+/// use reqwest::header::HeaderMap;
+/// use url::Url;
+///
+/// # tokio::runtime::Runtime::new().unwrap().block_on(async {
+/// let mut source = HttpSourceProtocol::new(HeaderMap::new()).unwrap();
+/// let dest = FileProtocol::new(WriteMode::CreateNew);
+///
+/// let dest_url = Url::parse("file:///tmp/output.bin").unwrap();
+/// let writer = dest.get_writer(dest_url).await?;
+///
+/// let config = TransferConfig {
+///     max_retries: 10,
+///     overwrite: false,
+///     custom_http_headers: vec![],
+/// };
+///
+/// let source_url = Url::parse("https://example.com/file.bin").unwrap();
+/// let bytes = run_transfer(&mut source, writer, source_url, &config, None).await?;
+/// # Ok::<(), ripcurl::protocol::TransferError>(())
+/// # });
+/// ```
 #[expect(
     clippy::missing_panics_doc,
     reason = "unwrap on a hardcoded infallible template"

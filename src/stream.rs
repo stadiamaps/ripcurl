@@ -1,8 +1,8 @@
-//! Streaming public API for consuming source bytes with built-in retry and resume.
+//! A streaming API for consuming source bytes with built-in retry and resume.
 //!
 //! Unlike [`crate::transfer::execute_transfer`],
 //! which writes bytes to a [`crate::destination::Destination`],
-//! [`stream_source`] returns a `Stream` that yields byte chunks directly.
+//! [`stream_from_url`] returns a `Stream` that yields byte chunks directly.
 
 use crate::protocol::{SourceProtocol, SourceReader, TransferError};
 use crate::retry_transient;
@@ -29,6 +29,35 @@ pub struct StreamInfo {
 /// - The source URL scheme is unsupported
 /// - The source does not support random access (e.g. an HTTP server that does not accept byte range requests)
 /// - The connection fails with a permanent error
+///
+/// # Examples
+///
+/// ```no_run
+/// use futures_util::StreamExt;
+/// use ripcurl::stream::stream_from_url;
+/// use ripcurl::transfer::TransferConfig;
+/// use std::pin::pin;
+/// use url::Url;
+///
+/// # tokio::runtime::Runtime::new().unwrap().block_on(async {
+/// let url = Url::parse("https://example.com/data.json").unwrap();
+/// let config = TransferConfig {
+///     max_retries: 10,
+///     overwrite: false,
+///     // You can add your own headers here (e.g. for auth).
+///     // Sensitive headers are stripped automatically on redirecting to a new origin.
+///     custom_http_headers: vec![],
+/// };
+///
+/// let (stream, info) = stream_from_url(url, &config).await?;
+/// let mut stream = pin!(stream);
+/// while let Some(chunk) = stream.next().await {
+///     let bytes = chunk?;
+///     // Process bytes...
+/// }
+/// # Ok::<(), ripcurl::protocol::TransferError>(())
+/// # });
+/// ```
 pub async fn stream_from_url(
     source_url: Url,
     config: &TransferConfig,
@@ -52,11 +81,39 @@ pub async fn stream_from_url(
 /// Makes the initial request, verifies resume support,
 /// then returns a stream backed by [`futures_util::stream::try_unfold`].
 ///
+/// [`stream_from_url`] provides a simpler interface,
+/// resolving the source protocol from the URL scheme automatically.
+/// Use `stream_from_source` when you need to supply your own [`SourceProtocol`] implementation.
+///
 /// # Errors
 ///
 /// Returns [`TransferError::Permanent`] if the source does not support random access
 /// (required to recover from mid-stream transient errors without data loss),
 /// or if the initial request fails permanently.
+///
+/// # Examples
+///
+/// ```no_run
+/// use futures_util::StreamExt;
+/// use ripcurl::protocol::http::HttpSourceProtocol;
+/// use ripcurl::stream::stream_from_source;
+/// use reqwest::header::HeaderMap;
+/// use std::pin::pin;
+/// use url::Url;
+///
+/// # tokio::runtime::Runtime::new().unwrap().block_on(async {
+/// let source = HttpSourceProtocol::new(HeaderMap::new()).unwrap();
+/// let url = Url::parse("https://example.com/data.bin").unwrap();
+///
+/// let (stream, info) = stream_from_source(source, url, 10).await?;
+/// let mut stream = pin!(stream);
+/// while let Some(chunk) = stream.next().await {
+///     let bytes = chunk?;
+///     // Process bytes...
+/// }
+/// # Ok::<(), ripcurl::protocol::TransferError>(())
+/// # });
+/// ```
 pub async fn stream_from_source<S: SourceProtocol + Send + 'static>(
     mut source: S,
     url: Url,

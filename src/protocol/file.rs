@@ -19,6 +19,10 @@ pub enum WriteMode {
     // TODO: Atomic: writes to a temp file and then renames atomically on finalize. Failed/corrupt clean up the temp file.
 }
 
+/// A destination protocol that writes to files.
+///
+/// As a user of the `ripcurl` library, you _probably_ don't need to use this directly,
+/// and should stick to the higher level transfer and stream APIs.
 pub struct FileProtocol {
     mode: WriteMode,
 }

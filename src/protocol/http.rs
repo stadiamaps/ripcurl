@@ -18,6 +18,10 @@ const RATE_LIMIT_RETRY_DELAY: Duration = Duration::from_secs(60);
 
 const MAX_REDIRECTS: usize = 10;
 
+/// HTTP(S) source protocol backed by [`reqwest`].
+///
+/// As a user of the `ripcurl` library, you _probably_ don't need to use this directly,
+/// and should stick to the higher level transfer and stream APIs.
 pub struct HttpSourceProtocol {
     client: reqwest::Client,
     /// Custom headers to include in every request.
