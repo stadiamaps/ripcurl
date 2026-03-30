@@ -8,6 +8,22 @@ use crate::protocol::{
 };
 use crate::transfer::TransferConfig;
 
+/// A transfer source.
+pub enum Source {
+    /// An HTTP(S) URL, accessible via a `GET` request.
+    ///
+    /// Schemes:
+    /// - `http://`
+    /// - `https://`
+    Http(HttpSourceProtocol),
+}
+
+/// Resolve a source URL to a [`Source`] protocol handler.
+///
+/// # Errors
+///
+/// Returns [`TransferError::Permanent`] if the URL scheme is not supported.
+/// Refer to the [`Source`] enum for supported variants.
 pub fn resolve_source(url: &Url, config: &TransferConfig) -> Result<Source, TransferError> {
     match url.scheme() {
         "http" | "https" => {
@@ -36,13 +52,13 @@ fn build_header_map(headers: &[(String, String)]) -> Result<HeaderMap, TransferE
     Ok(map)
 }
 
-/// A transfer source.
-pub enum Source {
-    Http(HttpSourceProtocol),
-}
-
 impl Source {
     /// Gets a reader from the source, starting at a given offset.
+    ///
+    /// # Errors
+    ///
+    /// Propagates connection and protocol errors from the underlying source
+    /// (e.g. DNS failure, TLS errors, and HTTP error responses).
     pub async fn get_reader(
         &mut self,
         url: Url,

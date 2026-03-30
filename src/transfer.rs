@@ -1,10 +1,10 @@
 //! Protocol-agnostic transfer orchestration.
 
-use crate::destination::resolve_destination;
+use crate::destination::{Destination, resolve_destination};
 use crate::protocol::{
     DestinationProtocol, DestinationWriter, SourceProtocol, SourceReader, TransferError,
 };
-use crate::source::resolve_source;
+use crate::source::{Source, resolve_source};
 use futures_util::StreamExt;
 use indicatif::{HumanBytes, HumanDuration, ProgressStyle};
 use std::pin::pin;
@@ -68,6 +68,7 @@ impl Default for ProgressState {
 }
 
 impl ProgressState {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             bytes_written: AtomicU64::new(0),
@@ -101,6 +102,13 @@ impl ProgressState {
 ///
 /// Returns a human-readable string with percentage (if the total size is known),
 /// number of bytes transferred, speed, and ETA.
+#[must_use]
+#[expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "acceptable for human-readable progress display"
+)]
 pub fn format_progress_log(bytes_written: u64, total_size: u64, elapsed: Duration) -> String {
     let speed = if elapsed.as_secs_f64() > 0.0 {
         bytes_written as f64 / elapsed.as_secs_f64()
@@ -175,9 +183,15 @@ macro_rules! retry_transient {
 /// Execute a transfer from `source_url` to `dest_url`.
 ///
 /// Transient errors are automatically retried,
-/// and many interruptions are automatically recovered.
+/// and many interruptions are automatically recovered from.
 ///
 /// Returns the total number of bytes written on success.
+///
+/// # Errors
+///
+/// Returns [`TransferError::Permanent`] if the URL scheme is unsupported,
+/// custom headers are invalid, the transfer fails with an unrecoverable error,
+/// or all retry attempts are exhausted.
 pub async fn execute_transfer(
     source_url: Url,
     dest_url: Url,
@@ -188,7 +202,7 @@ pub async fn execute_transfer(
         resolve_source(&source_url, config)?,
         resolve_destination(&dest_url, config)?,
     ) {
-        (crate::source::Source::Http(mut src), crate::destination::Destination::File(dest)) => {
+        (Source::Http(mut src), Destination::File(dest)) => {
             let writer = retry_transient!(3, dest.get_writer(dest_url.clone()))?;
             run_transfer(&mut src, writer, source_url, config, progress)
                 .instrument(tracing::info_span!(
@@ -204,6 +218,16 @@ pub async fn execute_transfer(
 ///
 /// Streams bytes from `source` to `writer`, retrying transient errors
 /// and handling offset mismatches (e.g. servers that don't support range requests).
+///
+/// # Errors
+///
+/// Returns [`TransferError::Permanent`] when the source or writer encounters
+/// an unrecoverable error, or when all retry attempts are exhausted.
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "unwrap on a hardcoded infallible template"
+)]
+#[expect(clippy::too_many_lines, reason = "core transfer orchestration loop")]
 pub async fn run_transfer<S: SourceProtocol, W: DestinationWriter>(
     source: &mut S,
     mut writer: W,

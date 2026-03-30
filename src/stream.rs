@@ -32,7 +32,13 @@ pub struct StreamInfo {
 pub async fn stream_from_url(
     source_url: Url,
     config: &TransferConfig,
-) -> Result<(impl Stream<Item = Result<Bytes, TransferError>> + Send, StreamInfo), TransferError> {
+) -> Result<
+    (
+        impl Stream<Item = Result<Bytes, TransferError>> + Send,
+        StreamInfo,
+    ),
+    TransferError,
+> {
     match resolve_source(&source_url, config)? {
         crate::source::Source::Http(src) => {
             stream_from_source(src, source_url, config.max_retries).await
@@ -45,17 +51,28 @@ pub async fn stream_from_url(
 /// Takes ownership of the source (the stream must own it for retry).
 /// Makes the initial request, verifies resume support,
 /// then returns a stream backed by [`futures_util::stream::try_unfold`].
+///
+/// # Errors
+///
+/// Returns [`TransferError::Permanent`] if the source does not support random access
+/// (required to recover from mid-stream transient errors without data loss),
+/// or if the initial request fails permanently.
 pub async fn stream_from_source<S: SourceProtocol + Send + 'static>(
     mut source: S,
     url: Url,
     max_retries: u32,
-) -> Result<(impl Stream<Item = Result<Bytes, TransferError>> + Send, StreamInfo), TransferError>
+) -> Result<
+    (
+        impl Stream<Item = Result<Bytes, TransferError>> + Send,
+        StreamInfo,
+    ),
+    TransferError,
+>
 where
     S::Reader: Send,
 {
     // Initial request (with retry for transient get_reader failures).
-    let (reader, read_offset) =
-        retry_transient!(max_retries, source.get_reader(url.clone(), 0))?;
+    let (reader, read_offset) = retry_transient!(max_retries, source.get_reader(url.clone(), 0))?;
 
     if !read_offset.supports_random_access {
         return Err(TransferError::Permanent {
@@ -130,8 +147,7 @@ where
                     });
                 }
 
-                let delay =
-                    crate::transfer::backoff_delay(state.retry_count - 1, server_hint);
+                let delay = crate::transfer::backoff_delay(state.retry_count - 1, server_hint);
                 tracing::warn!(
                     "Transient error during streaming on attempt {}/{}: {reason}. \
                      Retrying after {delay:?}.",
@@ -143,7 +159,9 @@ where
                 // Get a new reader at the current offset.
                 let (reader, read_offset) = retry_transient!(
                     state.max_retries,
-                    state.source.get_reader(state.url.clone(), state.total_bytes_yielded)
+                    state
+                        .source
+                        .get_reader(state.url.clone(), state.total_bytes_yielded)
                 )?;
 
                 // In streaming mode, offset mismatch is fatal:
@@ -167,4 +185,3 @@ where
         }
     }
 }
-

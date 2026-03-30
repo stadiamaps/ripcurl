@@ -40,8 +40,8 @@ impl ServerMeta {
     /// Used for offset-0 requests where resource identity continuity is not required.
     /// `previous` is consumed to prevent accidental reuse; only `supports_ranges`
     /// is preserved (servers don't always repeat the `Accept-Ranges` header).
-    fn fresh(response: &reqwest::Response, previous: Option<ServerMeta>) -> Self {
-        Self::extract(response, previous.as_ref())
+    fn fresh(response: &reqwest::Response, previous: Option<&ServerMeta>) -> Self {
+        Self::extract(response, previous)
     }
 
     /// Extract metadata from a resume (206) response, validating continuity with
@@ -134,6 +134,12 @@ impl std::fmt::Display for CachedStateConflict {
 }
 
 impl HttpSourceProtocol {
+    /// Creates a new HTTP source protocol with the given custom headers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransferError::Permanent`] if the underlying HTTP client cannot be built
+    /// (e.g. due to TLS backend initialization failure).
     pub fn new(custom_headers: reqwest::header::HeaderMap) -> Result<Self, TransferError> {
         let client = reqwest::Client::builder()
             .user_agent(format!("ripcurl/{}", env!("CARGO_PKG_VERSION")))
@@ -174,19 +180,17 @@ impl HttpSourceProtocol {
             .build_get(url)
             .send()
             .await
-            .map_err(|e| map_reqwest_error(e, 0))?;
+            .map_err(|e| map_reqwest_error(&e, 0))?;
 
         let status = response.status();
         if !status.is_success() {
             return Err(map_response_error(&response, 0));
         }
 
-        self.server_meta = Some(ServerMeta::fresh(&response, self.server_meta.take()));
+        let prev = self.server_meta.take();
+        self.server_meta = Some(ServerMeta::fresh(&response, prev.as_ref()));
         let total_size = response.content_length();
-        let supports_random_access = self
-            .server_meta
-            .as_ref()
-            .is_some_and(|m| m.supports_ranges);
+        let supports_random_access = self.server_meta.as_ref().is_some_and(|m| m.supports_ranges);
 
         Ok((
             HttpSourceReader { response },
@@ -219,10 +223,8 @@ impl HttpSourceProtocol {
 
             let total_size = parse_content_range_from_response(&response)
                 .or_else(|| response.content_length().map(|cl| requested_offset + cl));
-            let supports_random_access = self
-                .server_meta
-                .as_ref()
-                .is_some_and(|m| m.supports_ranges);
+            let supports_random_access =
+                self.server_meta.as_ref().is_some_and(|m| m.supports_ranges);
 
             Ok((
                 HttpSourceReader { response },
@@ -235,7 +237,8 @@ impl HttpSourceProtocol {
         } else {
             // 200 OK: server ignored Range header, doesn't support ranges.
             tracing::info!("Server returned 200 instead of 206. Range requests not supported.");
-            let mut meta = ServerMeta::fresh(&response, self.server_meta.take());
+            let prev = self.server_meta.take();
+            let mut meta = ServerMeta::fresh(&response, prev.as_ref());
             meta.supports_ranges = false;
             self.server_meta = Some(meta);
 
@@ -305,7 +308,7 @@ impl SourceProtocol for HttpSourceProtocol {
             }
         }
 
-        let response = request.send().await.map_err(|e| map_reqwest_error(e, 0))?;
+        let response = request.send().await.map_err(|e| map_reqwest_error(&e, 0))?;
         let status = response.status();
 
         // 412 Precondition Failed means the resource changed since our last request.
@@ -339,7 +342,7 @@ impl SourceReader for HttpSourceReader {
                     consumed_byte_count += bytes.len() as u64;
                     Ok(bytes)
                 }
-                Err(e) => Err(map_reqwest_error(e, consumed_byte_count)),
+                Err(e) => Err(map_reqwest_error(&e, consumed_byte_count)),
             })
     }
 }
@@ -348,7 +351,7 @@ impl SourceReader for HttpSourceReader {
 ///
 /// `consumed_byte_count` is the number of bytes successfully consumed by the
 /// current reader before the error occurred.
-fn map_reqwest_error(e: reqwest::Error, consumed_byte_count: u64) -> TransferError {
+fn map_reqwest_error(e: &reqwest::Error, consumed_byte_count: u64) -> TransferError {
     // Note: `reqwest::Error` does not expose a matchable enum; the `is_*()` methods
     // are the intended API for classification.
     if e.is_timeout() {
@@ -424,20 +427,16 @@ fn classify_error_status_code(
     };
 
     match status {
-        // Transient client errors
-        StatusCode::REQUEST_TIMEOUT => TransferError::Transient {
-            consumed_byte_count,
-            minimum_retry_delay: retry_after.unwrap_or(DEFAULT_RETRY_DELAY),
-            reason,
-        },
+        // Rate-limited: use a longer default delay
         StatusCode::TOO_MANY_REQUESTS => TransferError::Transient {
             consumed_byte_count,
             minimum_retry_delay: retry_after.unwrap_or(RATE_LIMIT_RETRY_DELAY),
             reason,
         },
 
-        // Transient server errors
-        StatusCode::INTERNAL_SERVER_ERROR
+        // Transient client/server errors
+        StatusCode::REQUEST_TIMEOUT
+        | StatusCode::INTERNAL_SERVER_ERROR
         | StatusCode::BAD_GATEWAY
         | StatusCode::SERVICE_UNAVAILABLE
         | StatusCode::GATEWAY_TIMEOUT => TransferError::Transient {
@@ -541,7 +540,9 @@ mod tests {
             } => {
                 assert_eq!(retry_delay, DEFAULT_RETRY_DELAY);
             }
-            other => panic!("expected Transient, got: {other:?}"),
+            other @ TransferError::Permanent { .. } => {
+                panic!("expected Transient, got: {other:?}")
+            }
         }
     }
 
@@ -554,7 +555,9 @@ mod tests {
             } => {
                 assert_eq!(retry_delay, RATE_LIMIT_RETRY_DELAY);
             }
-            other => panic!("expected Transient, got: {other:?}"),
+            other @ TransferError::Permanent { .. } => {
+                panic!("expected Transient, got: {other:?}")
+            }
         }
     }
 
@@ -568,7 +571,9 @@ mod tests {
             } => {
                 assert_eq!(retry_delay, custom_delay);
             }
-            other => panic!("expected Transient, got: {other:?}"),
+            other @ TransferError::Permanent { .. } => {
+                panic!("expected Transient, got: {other:?}")
+            }
         }
     }
 
@@ -621,7 +626,9 @@ mod tests {
             } => {
                 assert_eq!(consumed_byte_count, 12345);
             }
-            other => panic!("expected Transient, got: {other:?}"),
+            other @ TransferError::Permanent { .. } => {
+                panic!("expected Transient, got: {other:?}")
+            }
         }
     }
 
@@ -675,7 +682,9 @@ mod tests {
                     "expected description beyond status, got: {reason}"
                 );
             }
-            other => panic!("expected Permanent, got: {other:?}"),
+            other @ TransferError::Transient { .. } => {
+                panic!("expected Permanent, got: {other:?}")
+            }
         }
     }
 
@@ -688,7 +697,9 @@ mod tests {
                     "expected 'denied', got: {reason}"
                 );
             }
-            other => panic!("expected Permanent, got: {other:?}"),
+            other @ TransferError::Transient { .. } => {
+                panic!("expected Permanent, got: {other:?}")
+            }
         }
     }
 
@@ -701,7 +712,9 @@ mod tests {
                     "expected 'auth', got: {reason}"
                 );
             }
-            other => panic!("expected Permanent, got: {other:?}"),
+            other @ TransferError::Transient { .. } => {
+                panic!("expected Permanent, got: {other:?}")
+            }
         }
     }
 
@@ -714,7 +727,9 @@ mod tests {
                     "expected 'unavailable', got: {reason}"
                 );
             }
-            other => panic!("expected Transient, got: {other:?}"),
+            other @ TransferError::Permanent { .. } => {
+                panic!("expected Transient, got: {other:?}")
+            }
         }
     }
 
@@ -727,7 +742,9 @@ mod tests {
                     "expected 'internal error', got: {reason}"
                 );
             }
-            other => panic!("expected Transient, got: {other:?}"),
+            other @ TransferError::Permanent { .. } => {
+                panic!("expected Transient, got: {other:?}")
+            }
         }
     }
 

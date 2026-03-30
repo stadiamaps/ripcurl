@@ -5,6 +5,7 @@
 
 use super::{DestinationProtocol, DestinationWriter, TransferError};
 use std::io::ErrorKind;
+use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use url::Url;
@@ -23,6 +24,7 @@ pub struct FileProtocol {
 }
 
 impl FileProtocol {
+    #[must_use]
     pub fn new(mode: WriteMode) -> Self {
         FileProtocol { mode }
     }
@@ -36,19 +38,19 @@ impl DestinationProtocol for FileProtocol {
             return Err(TransferError::Permanent {
                 reason: format!("unsupported scheme {} for file protocol", url.scheme()),
             });
-        };
+        }
 
-        let final_path = url.to_file_path().map_err(|_| TransferError::Permanent {
+        let final_path = url.to_file_path().map_err(|()| TransferError::Permanent {
             reason: format!("URL ({url}) does not seem to be a file path"),
         })?;
 
         let file = match &self.mode {
             WriteMode::CreateNew => File::create_new(&final_path)
                 .await
-                .map_err(|e| map_io_error(e, 0))?,
+                .map_err(|e| map_io_error(&e, 0))?,
             WriteMode::Overwrite => File::create(&final_path)
                 .await
-                .map_err(|e| map_io_error(e, 0))?,
+                .map_err(|e| map_io_error(&e, 0))?,
         };
 
         Ok(FileWriter {
@@ -76,7 +78,7 @@ impl DestinationWriter for FileWriter {
                 .file
                 .write(bytes)
                 .await
-                .map_err(|e| map_io_error(e, self.bytes_written))
+                .map_err(|e| map_io_error(&e, self.bytes_written))
             {
                 Ok(n) => {
                     if n == 0 {
@@ -99,7 +101,7 @@ impl DestinationWriter for FileWriter {
         self.file
             .flush()
             .await
-            .map_err(|e| map_io_error(e, self.bytes_written))?;
+            .map_err(|e| map_io_error(&e, self.bytes_written))?;
 
         self.finalized = true;
         Ok(())
@@ -109,11 +111,11 @@ impl DestinationWriter for FileWriter {
         self.file
             .set_len(0)
             .await
-            .map_err(|e| map_io_error(e, self.bytes_written))?;
+            .map_err(|e| map_io_error(&e, self.bytes_written))?;
         self.file
             .seek(std::io::SeekFrom::Start(0))
             .await
-            .map_err(|e| map_io_error(e, self.bytes_written))?;
+            .map_err(|e| map_io_error(&e, self.bytes_written))?;
         self.bytes_written = 0;
         Ok(())
     }
@@ -142,7 +144,8 @@ impl Drop for FileWriter {
 }
 
 /// Maps an I/O error to a [`TransferError`], classifying by error kind.
-fn map_io_error(e: std::io::Error, bytes_written: u64) -> TransferError {
+#[expect(clippy::too_many_lines, reason = "exhaustive match on ErrorKind")]
+fn map_io_error(e: &std::io::Error, bytes_written: u64) -> TransferError {
     match e.kind() {
         // Transient failures
         ErrorKind::Interrupted
@@ -151,7 +154,7 @@ fn map_io_error(e: std::io::Error, bytes_written: u64) -> TransferError {
         | ErrorKind::ExecutableFileBusy
         | ErrorKind::Deadlock => TransferError::Transient {
             consumed_byte_count: bytes_written,
-            minimum_retry_delay: Default::default(),
+            minimum_retry_delay: Duration::default(),
             reason: e.to_string(),
         },
         // Permanent failures with human-friendly messages
@@ -276,19 +279,21 @@ mod tests {
     #[test]
     fn test_map_io_error_preserves_bytes_written() {
         let err = std::io::Error::new(ErrorKind::Interrupted, "interrupted");
-        match map_io_error(err, 42) {
+        match map_io_error(&err, 42) {
             TransferError::Transient {
                 consumed_byte_count,
                 ..
             } => assert_eq!(consumed_byte_count, 42),
-            other => panic!("expected Transient, got: {other:?}"),
+            other @ TransferError::Permanent { .. } => {
+                panic!("expected Transient, got: {other:?}")
+            }
         }
     }
 
     #[test]
     fn test_map_io_error_friendly() {
         let err = std::io::Error::new(ErrorKind::AlreadyExists, "File exists");
-        match map_io_error(err, 0) {
+        match map_io_error(&err, 0) {
             TransferError::Permanent { reason } => {
                 assert!(
                     reason.contains("already exists"),
@@ -299,7 +304,9 @@ mod tests {
                     "expected '--overwrite' hint, got: {reason}"
                 );
             }
-            other => panic!("expected Permanent, got: {other:?}"),
+            other @ TransferError::Transient { .. } => {
+                panic!("expected Permanent, got: {other:?}")
+            }
         }
     }
 }
