@@ -1,17 +1,92 @@
 # ripcurl
 
+[![crates.io](https://img.shields.io/crates/v/ripcurl.svg)](https://crates.io/crates/ripcurl)
+[![docs.rs](https://docs.rs/ripcurl/badge.svg)](https://docs.rs/ripcurl)
+
 File transfers are hard.
 Ripcurl's goal is to make them easy,
 without needing to remember an alphabet soup of command line flags,
 or resort to writing contorted loops in a shell script.
 
-## Quickstart
+## CLI Quickstart
 
 ```shell
 ripcurl https://example.com/really-big-file.tar.gz /path/to/really-big-file.tar.gz
 ```
 
 That's it!
+
+### Using ripcurl as a library
+
+Ripcurl can also be used as a Rust library to make large streaming transfers more resilient.
+
+#### Download a file
+
+The simplest path is [`transfer::execute_transfer`],
+which handles source/destination resolution, retries, and progress tracking.
+This is essentially what the `ripcurl` CLI does.
+
+```rust,no_run
+use ripcurl::transfer::{TransferConfig, execute_transfer};
+use url::Url;
+
+#[tokio::main]
+async fn main() -> Result<(), ripcurl::protocol::TransferError> {
+    let source = Url::parse("https://example.com/big-file.tar.gz").unwrap();
+    let dest = Url::parse("file:///tmp/big-file.tar.gz").unwrap();
+
+    let config = TransferConfig {
+        max_retries: 10,
+        overwrite: false,
+        custom_http_headers: vec![],
+    };
+
+    let bytes_written = execute_transfer(source, dest, &config, None).await?;
+    println!("Transferred {bytes_written} bytes");
+    Ok(())
+}
+```
+
+#### Stream bytes without writing to disk
+
+If you want to consume bytes directly (e.g. for parsing or piping),
+use the [`stream`] module:
+
+```rust,no_run
+use futures_util::StreamExt;
+use ripcurl::stream::stream_from_url;
+use ripcurl::transfer::TransferConfig;
+use std::pin::pin;
+use url::Url;
+
+#[tokio::main]
+async fn main() -> Result<(), ripcurl::protocol::TransferError> {
+    let url = Url::parse("https://example.com/data.json").unwrap();
+    let config = TransferConfig {
+        max_retries: 10,
+        overwrite: false,
+        custom_http_headers: vec![],
+    };
+
+    // NOTE: The streaming API will immediately fail if the source doesn't support random access
+    // (e.g. an HTTP server that doesn't support range requests).
+    let (stream, info) = stream_from_url(url, &config).await?;
+    let mut stream = pin!(stream);
+    if let Some(size) = info.total_size {
+        println!("Expecting {size} bytes");
+    }
+
+    let mut total = 0u64;
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk?;
+        total += bytes.len() as u64;
+        // Process bytes...
+    }
+    println!("Received {total} bytes");
+    Ok(())
+}
+```
+
 Without needing to ask, ripcurl will:
 
 - Log important events in the transfer lifecycle

@@ -87,7 +87,7 @@ pub trait SourceReader {
     fn stream_bytes(self) -> impl Stream<Item = Result<Bytes, TransferError>> + Send;
 }
 
-/// `SourceProtocol`s can be used as a source for a file transfer.
+/// `DestinationProtocol`s can be used as a destination for a file transfer.
 pub trait DestinationProtocol {
     type Writer: DestinationWriter;
 
