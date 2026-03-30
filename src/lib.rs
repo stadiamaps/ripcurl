@@ -3,4 +3,5 @@
 pub mod destination;
 pub mod protocol;
 pub mod source;
+pub mod stream;
 pub mod transfer;

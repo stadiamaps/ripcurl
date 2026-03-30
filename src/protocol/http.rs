@@ -183,12 +183,17 @@ impl HttpSourceProtocol {
 
         self.server_meta = Some(ServerMeta::fresh(&response, self.server_meta.take()));
         let total_size = response.content_length();
+        let supports_random_access = self
+            .server_meta
+            .as_ref()
+            .is_some_and(|m| m.supports_ranges);
 
         Ok((
             HttpSourceReader { response },
             ReadOffset {
                 offset: 0,
                 total_size,
+                supports_random_access,
             },
         ))
     }
@@ -214,12 +219,17 @@ impl HttpSourceProtocol {
 
             let total_size = parse_content_range_from_response(&response)
                 .or_else(|| response.content_length().map(|cl| requested_offset + cl));
+            let supports_random_access = self
+                .server_meta
+                .as_ref()
+                .is_some_and(|m| m.supports_ranges);
 
             Ok((
                 HttpSourceReader { response },
                 ReadOffset {
                     offset: requested_offset,
                     total_size,
+                    supports_random_access,
                 },
             ))
         } else {
@@ -236,6 +246,7 @@ impl HttpSourceProtocol {
                 ReadOffset {
                     offset: 0,
                     total_size,
+                    supports_random_access: false,
                 },
             ))
         }
