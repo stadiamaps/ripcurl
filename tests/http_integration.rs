@@ -8,7 +8,7 @@ use ripcurl::protocol::{SourceProtocol, SourceReader, TransferError};
 use std::pin::pin;
 use std::time::Duration;
 
-/// Collect all bytes from a SourceReader.
+/// Collect all bytes from a [`SourceReader`].
 async fn collect_reader(reader: impl SourceReader) -> Result<Vec<u8>, TransferError> {
     let mut bytes = Vec::new();
     let mut stream = pin!(reader.stream_bytes());
@@ -29,7 +29,7 @@ async fn test_basic_download() {
     ))
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
     let (reader, offset) = source.get_reader(server.url("/file"), 0).await.unwrap();
 
     assert_eq!(offset.offset, 0);
@@ -53,7 +53,7 @@ async fn test_range_request_resume() {
     ))
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
 
     // First request: get first 5000 bytes
     let (reader, offset) = source.get_reader(server.url("/file"), 0).await.unwrap();
@@ -85,7 +85,7 @@ async fn test_server_no_range_support() {
     )
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
 
     // First request establishes connection
     let (reader, offset) = source.get_reader(server.url("/file"), 0).await.unwrap();
@@ -127,7 +127,7 @@ async fn test_503_then_success() {
     ))
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
 
     // First two calls should fail with transient errors
     let err = source.get_reader(server.url("/file"), 0).await.unwrap_err();
@@ -160,7 +160,7 @@ async fn test_429_with_retry_after() {
     ))
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
 
     // First call: 429
     let err = source.get_reader(server.url("/file"), 0).await.unwrap_err();
@@ -171,7 +171,9 @@ async fn test_429_with_retry_after() {
         } => {
             assert_eq!(minimum_retry_delay, Duration::from_secs(1));
         }
-        other => panic!("expected Transient, got: {other:?}"),
+        other @ TransferError::Permanent { .. } => {
+            panic!("expected Transient, got: {other:?}")
+        }
     }
 
     // Second call: success
@@ -191,7 +193,7 @@ async fn test_connection_drop_mid_stream() {
     ))
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
     let result = source.get_reader(server.url("/file"), 0).await;
 
     // The server sends valid HTTP headers (200 OK, Content-Length: 10000) but truncates
@@ -211,12 +213,11 @@ async fn test_connection_drop_mid_stream() {
             let mut got_error = false;
 
             while let Some(result) = stream.next().await {
-                match result {
-                    Ok(bytes) => total += bytes.len() as u64,
-                    Err(_) => {
-                        got_error = true;
-                        break;
-                    }
+                if let Ok(bytes) = result {
+                    total += bytes.len() as u64;
+                } else {
+                    got_error = true;
+                    break;
                 }
             }
 
@@ -249,7 +250,7 @@ async fn test_404_permanent() {
     ))
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
     let err = source.get_reader(server.url("/file"), 0).await.unwrap_err();
 
     assert!(matches!(err, TransferError::Permanent { .. }));
@@ -267,7 +268,7 @@ async fn test_etag_included_on_resume() {
     )
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
 
     // First request to cache the ETag
     let (reader, _) = source.get_reader(server.url("/file"), 0).await.unwrap();
@@ -314,7 +315,7 @@ async fn test_redirect_chain() {
     )
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
 
     // Request to /start should follow redirects and get the content from /final
     let (reader, offset) = source.get_reader(server.url("/start"), 0).await.unwrap();
@@ -350,7 +351,7 @@ async fn test_redirect_to_different_server() {
     ))
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
     let (reader, _) = source
         .get_reader(server1.url("/download"), 0)
         .await
@@ -405,7 +406,7 @@ async fn test_etag_change_after_range_failure_does_not_panic() {
     )
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
 
     // Step 1: initial download, caches ETag v1
     let (reader, offset) = source.get_reader(server.url("/file"), 0).await.unwrap();
@@ -437,7 +438,7 @@ async fn test_206_reports_total_size_from_content_range() {
     ))
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
 
     // First request to cache server metadata
     let (reader, _) = source.get_reader(server.url("/file"), 0).await.unwrap();
@@ -496,7 +497,7 @@ async fn test_disappearing_etag_detected_on_resume() {
     )
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
 
     // Step 1: initial download, caches ETag
     let (reader, _) = source.get_reader(server.url("/file"), 0).await.unwrap();
@@ -811,7 +812,7 @@ async fn test_etag_continuity_through_redirect_happy_path() {
     )
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
 
     // First request: redirect → /file, caches ETag "v1"
     let (reader, _) = source.get_reader(server.url("/download"), 0).await.unwrap();
@@ -887,7 +888,7 @@ async fn test_cross_server_redirect_etag_mismatch_triggers_restart() {
     ))
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
 
     // First request: caches ETag "v1" from CDN
     let (reader, _) = source
@@ -965,7 +966,7 @@ async fn test_412_through_redirect_triggers_restart() {
     ))
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
 
     // Initial download
     let (reader, _) = source
@@ -997,6 +998,10 @@ async fn test_412_through_redirect_triggers_restart() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::similar_names,
+    reason = "server2a/server2b are intentional CDN node names"
+)]
 async fn test_redirect_target_changes_between_requests() {
     let content_size = 1000;
 
@@ -1042,7 +1047,7 @@ async fn test_redirect_target_changes_between_requests() {
     ))
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
 
     // First request → node A, caches ETag "node-a-etag"
     let (reader, _) = source
@@ -1151,7 +1156,7 @@ async fn test_decode_error_mid_stream_is_transient() {
     ))
     .await;
 
-    let mut source = HttpSourceProtocol::new(Default::default()).unwrap();
+    let mut source = HttpSourceProtocol::new(HeaderMap::default()).unwrap();
     let (reader, _offset) = source.get_reader(server.url("/file"), 0).await.unwrap();
 
     // Stream bytes until we hit the error

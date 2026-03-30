@@ -167,11 +167,10 @@ async fn main() -> ExitCode {
 
     match result {
         Ok(_bytes) => ExitCode::SUCCESS,
-        Err(ripcurl::protocol::TransferError::Permanent { reason }) => {
-            eprintln!("Transfer failed: {reason}");
-            ExitCode::FAILURE
-        }
-        Err(ripcurl::protocol::TransferError::Transient { reason, .. }) => {
+        Err(
+            ripcurl::protocol::TransferError::Permanent { reason }
+            | ripcurl::protocol::TransferError::Transient { reason, .. },
+        ) => {
             eprintln!("Transfer failed: {reason}");
             ExitCode::FAILURE
         }
@@ -233,7 +232,7 @@ fn parse_url(input: &str) -> Result<Url, String> {
     };
 
     Url::from_file_path(&abs_path)
-        .map_err(|_| format!("could not convert path to URL: {}", abs_path.display()))
+        .map_err(|()| format!("could not convert path to URL: {}", abs_path.display()))
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@ use url::Url;
 use super::mock_protocols::{MockReaderResult, MockSource, MockWriter};
 
 /// Generate a deterministic byte pattern: `[0, 1, 2, ..., 255, 0, 1, ...]`.
+#[expect(clippy::cast_possible_truncation, reason = "i % 256 always fits in u8")]
 pub fn generate_pattern(len: usize) -> Vec<u8> {
     (0..len).map(|i| (i % 256) as u8).collect()
 }
@@ -111,13 +112,12 @@ impl TransferTest {
         } = compile(&data, &self.steps, self.source_chunk_size);
 
         // Validate step consistency before running
-        if matches!(self.expect, Expect::Succeeds) && final_data_cursor != self.length {
-            panic!(
-                "TransferTest: steps read {final_data_cursor} bytes total but length is {}. \
-                 Check your Read() values.",
-                self.length
-            );
-        }
+        assert!(
+            !matches!(self.expect, Expect::Succeeds) || final_data_cursor == self.length,
+            "TransferTest: steps read {final_data_cursor} bytes total but length is {}. \
+             Check your Read() values.",
+            self.length
+        );
 
         let mut source = MockSource::new(results);
 
@@ -212,7 +212,10 @@ impl DestinationWriter for VerifyingWriter {
     }
 
     async fn finalize(self) -> Result<(), TransferError> {
-        *self.captured.lock().unwrap() = self.inner.written.clone();
+        self.captured
+            .lock()
+            .unwrap()
+            .clone_from(&self.inner.written);
         self.inner.finalize().await
     }
 
@@ -300,6 +303,10 @@ impl AttemptBuilder {
 /// - `orch_offset`: what the orchestrator's `total_bytes_written` will be when it calls
 ///   `get_reader`. Normally equals `data_cursor`, but diverges after `Restart` because
 ///   the orchestrator doesn't know about the restart until it sees the offset mismatch.
+#[expect(
+    clippy::too_many_lines,
+    reason = "test DSL compiler with many step types"
+)]
 fn compile(data: &[u8], steps: &[Step], chunk_size: Option<usize>) -> Compiled {
     let total_size = data.len() as u64;
     let mut results: Vec<MockReaderResult> = Vec::new();
@@ -316,6 +323,10 @@ fn compile(data: &[u8], steps: &[Step], chunk_size: Option<usize>) -> Compiled {
 
     /// Start a new attempt if one isn't already in progress.
     /// Returns mutable reference to the attempt builder.
+    #[expect(
+        clippy::items_after_statements,
+        reason = "helper fn is local to compile()"
+    )]
     fn ensure_attempt<'a>(
         current_attempt: &'a mut Option<AttemptBuilder>,
         expected_offsets: &mut Vec<u64>,

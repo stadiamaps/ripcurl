@@ -26,18 +26,30 @@ jobs:
       cancel-in-progress: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         
       - name: rustfmt checks
         run: cargo fmt --check
   
+  clippy:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-rust-clippy
+      cancel-in-progress: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Clippy checks
+        run: cargo clippy --all-targets -- -D warnings
+
   build:
     runs-on: ubuntu-latest
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-rust-build
       cancel-in-progress: true
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     
     - uses: taiki-e/install-action@nextest
     - uses: taiki-e/install-action@just

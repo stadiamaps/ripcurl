@@ -90,7 +90,7 @@ impl SourceReader for MockReader {
     }
 }
 
-/// The kind of error a MockWriter should produce (without consumed_byte_count,
+/// The kind of error a `MockWriter` should produce (without `consumed_byte_count`,
 /// which is auto-computed from the writer's actual state at error time).
 pub enum MockErrorKind {
     Transient { reason: String },

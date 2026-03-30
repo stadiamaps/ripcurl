@@ -17,6 +17,7 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
 /// Deterministic content of `size` bytes: `[0, 1, 2, ..., 255, 0, 1, ...]`.
+#[expect(clippy::cast_possible_truncation, reason = "i % 256 always fits in u8")]
 pub fn generate_content(size: usize) -> Vec<u8> {
     (0..size).map(|i| (i % 256) as u8).collect()
 }
@@ -46,7 +47,7 @@ pub enum RequestRule {
         then: Box<RequestRule>,
     },
     /// Override identity headers for this request, then apply the inner rule.
-    /// Replaces the server-level etag/last_modified entirely.
+    /// Replaces the server-level `etag`/`last_modified` entirely.
     WithHeaders {
         etag: Option<String>,
         last_modified: Option<String>,
@@ -65,9 +66,9 @@ pub struct ServerConfig {
     pub default_rules: VecDeque<RequestRule>,
     /// Fallback rule used when a path's queue (or default queue) is exhausted.
     pub fallback_rule: RequestRule,
-    /// ETag value to include in responses (if set).
+    /// `ETag` value to include in responses (if set).
     pub etag: Option<String>,
-    /// Last-Modified value to include in responses (if set).
+    /// `Last-Modified` value to include in responses (if set).
     pub last_modified: Option<String>,
 }
 
@@ -99,7 +100,7 @@ impl ServerConfig {
         self
     }
 
-    /// Set the ETag header value.
+    /// Set the `ETag` header value.
     pub fn with_etag(mut self, etag: Option<String>) -> Self {
         self.etag = etag;
         self
@@ -124,10 +125,10 @@ pub struct ServerState {
 impl ServerState {
     fn pop_rule(&mut self, path: &str) -> RequestRule {
         // Try path-specific queue first
-        if let Some(queue) = self.config.path_rules.get_mut(path) {
-            if let Some(rule) = queue.pop_front() {
-                return rule;
-            }
+        if let Some(queue) = self.config.path_rules.get_mut(path)
+            && let Some(rule) = queue.pop_front()
+        {
+            return rule;
         }
         // Then default queue
         if let Some(rule) = self.config.default_rules.pop_front() {
@@ -234,6 +235,10 @@ async fn handle_request(
     .await
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "test helper with exhaustive rule handling"
+)]
 async fn apply_rule(
     rule: RequestRule,
     headers: &HeaderMap,
@@ -250,6 +255,10 @@ async fn apply_rule(
             };
 
             if let Some(start) = range_start {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "test server; content fits in memory"
+                )]
                 let start = start as usize;
                 if start >= content.len() {
                     return StatusCode::RANGE_NOT_SATISFIABLE.into_response();

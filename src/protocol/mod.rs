@@ -65,7 +65,7 @@ pub trait SourceProtocol {
     /// `start_byte_offset` is the offset from which to start reading.
     /// This allows for resuming a partial transfer.
     ///
-    /// The protocol manages its own integrity-checking state (ETags, mtimes, etc.)
+    /// The protocol manages its own integrity-checking state (`ETag`s, `mtime`s, etc.)
     /// internally via `&mut self`.
     ///
     /// # Implementation notes

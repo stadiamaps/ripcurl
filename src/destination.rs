@@ -7,9 +7,18 @@ use url::Url;
 
 /// A transfer destination.
 pub enum Destination {
+    /// A file accessible via a local filesystem mount.
+    ///
+    /// Scheme: `file://`.
     File(FileProtocol),
 }
 
+/// Resolve a destination URL to a [`Destination`] protocol handler.
+///
+/// # Errors
+///
+/// Returns [`TransferError::Permanent`] if the URL scheme is not supported.
+/// Refer to the [`Destination`] enum for supported schemes.
 pub fn resolve_destination(
     url: &Url,
     config: &TransferConfig,
@@ -30,6 +39,11 @@ pub fn resolve_destination(
 
 impl Destination {
     /// Creates a writer which can be used to persist bytes to the destination.
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors from the underlying protocol
+    /// (e.g. I/O failures or permission issues).
     pub async fn get_writer(&self, url: Url) -> Result<impl DestinationWriter, TransferError> {
         match self {
             Destination::File(proto) => {
